@@ -1,3 +1,15 @@
+## Unreleased
+
+- Pin ARM/ARM64 Tailscale Android CLI 1.98.8 and jq 1.6 downloads and installed
+  binaries by SHA-256. Require certificate-verified HTTPS for lightweight installs;
+  retain full ZIPs for installations without curl.
+- Stage and verify required files before touching the existing installation;
+  reject corrupt full packages and refuse to overwrite existing backup slots.
+- Build from an explicit file allowlist in disposable staging, refuse output
+  overwrites, and include ZIP checksum sidecars. Pin CI actions and run host tests.
+- Disable the upstream automatic-update feed pending a reviewed fork release.
+  No module version bump, runtime networking change or device validation is included.
+
 ## v2.0.0.1
 
 - 429e1b0 build: fix version bump and add pre-release for build version
