@@ -1,50 +1,56 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-VERSION="${1:-$(grep '^version=' module.prop | cut -d'=' -f2)}"
-DIST_DIR="dist"
-BIN_DIR="tailscale/bin"
+cd "$(dirname "$0")/../.."
+DECLARED_VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
+VERSION="${1:-$DECLARED_VERSION}"
+if [[ ! "$VERSION" =~ ^v[0-9]+(\.[0-9]+){3}$ || "$VERSION" != "$DECLARED_VERSION" ]]; then
+  echo "Version must match module.prop (vMAJOR.MINOR.PATCH.BUILD)" >&2
+  exit 1
+fi
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/magisk-tailscaled"
+BUILD_DIR="${BUILD_DIR:-$CACHE_ROOT/build}"
+DIST_DIR="${DIST_DIR:-$CACHE_ROOT/dist}"
+mkdir -p "$BUILD_DIR" "$DIST_DIR"
+BUILD_DIR=$(cd "$BUILD_DIR" && pwd)
+DIST_DIR=$(cd "$DIST_DIR" && pwd)
+for suffix in '' '-full'; do
+  for extension in zip zip.sha256; do
+    if [[ -e "$DIST_DIR/Magisk-Tailscaled-${VERSION}${suffix}.${extension}" ]]; then
+      echo "Output already exists; choose a new DIST_DIR: $DIST_DIR" >&2
+      exit 1
+    fi
+  done
+done
+STAGE=$(mktemp -d "$BUILD_DIR/package.XXXXXX")
+trap 'rm -rf -- "$STAGE"' EXIT
+PACKAGE="$STAGE/module"
+mkdir -p "$PACKAGE/tailscale/bin" "$PACKAGE/tailscale/scripts" "$PACKAGE/META-INF/com/google/android" "$STAGE/dist"
 
-get_latest_release() {
-  curl -s "https://api.github.com/repos/$1/releases/latest" | grep '"browser_download_url"' | grep "$2" | sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/'
-}
+# An allowlist keeps developer files and unrelated local data out of root installers.
+cp module.prop customize.sh service.sh uninstall.sh LICENSE "$PACKAGE/"
+cp META-INF/com/google/android/{update-binary,updater-script} "$PACKAGE/META-INF/com/google/android/"
+cp tailscale/scripts/{start.sh,tailscaled.service,tailscaled.inotify} "$PACKAGE/tailscale/scripts/"
+cp tailscale/settings.sh tailscale/dependencies.sh "$PACKAGE/tailscale/"
+# shellcheck source=../../tailscale/dependencies.sh
+. tailscale/dependencies.sh
 
-echo "Building Magisk-Tailscaled ${VERSION}"
-echo "========================================"
-
-mkdir -p "$BIN_DIR" "$DIST_DIR"
-
-echo "Downloading binaries..."
+echo "Building $VERSION using pins in tailscale/dependencies.sh"
 for ARCH in arm arm64; do
-  case $ARCH in
-    arm) F_ARCH=armv7a ;;
-    arm64) F_ARCH=aarch64 ;;
-  esac
-  
-  echo "- Downloading tailscaled for ${ARCH}..."
-  URL=$(get_latest_release "anasfanani/tailscale-android-cli" "tailscale_.*_${ARCH}\.tgz")
-  curl -#L "$URL" | tar -xz -C "$BIN_DIR"
-  mv "$BIN_DIR/tailscaled" "$BIN_DIR/tailscaled-$ARCH"
-  
-  echo "- Downloading jq for ${ARCH}..."
-  URL=$(get_latest_release "theshoqanebi/jq-build-for-android" "jq-${F_ARCH}-linux-android")
-  curl -#L "$URL" -o "$BIN_DIR/jq-$ARCH"
+  ts_fetch_binaries "$ARCH" "$STAGE/$ARCH"
+  cp "$STAGE/$ARCH/tailscaled" "$PACKAGE/tailscale/bin/tailscaled-$ARCH"
+  cp "$STAGE/$ARCH/jq" "$PACKAGE/tailscale/bin/jq-$ARCH"
 done
 
-echo ""
-echo "Creating zip without binaries..."
-zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}.zip" . -x "*.git*" "dist/*" "*.zip" "*.json" "*.md" "${BIN_DIR}/*" ".shellcheckrc" >/dev/null
-
-echo "Creating zip with binaries..."
-zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}-full.zip" . -x "*.git*" "dist/*" "*.zip" "*.json" "*.md" ".shellcheckrc" >/dev/null
-
-rm -f "$BIN_DIR"/*
-
-echo ""
-echo "Build completed successfully!"
-echo "========================================"
-ls -lh "${DIST_DIR}/"
-echo "========================================"
-echo "Created: ${DIST_DIR}/Magisk-Tailscaled-${VERSION}.zip (no binaries - downloads on install)"
-echo "Created: ${DIST_DIR}/Magisk-Tailscaled-${VERSION}-full.zip (includes all binaries)"
-
+printf 'full\n' > "$PACKAGE/tailscale/package-type"
+(cd "$PACKAGE" && zip -q -9 -r "$STAGE/dist/Magisk-Tailscaled-${VERSION}-full.zip" .)
+rm -r "$PACKAGE/tailscale/bin"
+printf 'lightweight\n' > "$PACKAGE/tailscale/package-type"
+(cd "$PACKAGE" && zip -q -9 -r "$STAGE/dist/Magisk-Tailscaled-${VERSION}.zip" .)
+for archive in "$STAGE/dist/"*.zip; do
+  name=${archive##*/}
+  (cd "$STAGE/dist" && sha256sum "$name" > "$name.sha256")
+done
+# Refuse to overwrite even if another build created an output after the preflight.
+(set -o noclobber; for artifact in "$STAGE/dist/"*; do cat "$artifact" > "$DIST_DIR/${artifact##*/}"; done)
+printf 'Created full (offline) and lightweight (verified-download) ZIPs and SHA-256 files in %s\n' "$DIST_DIR"

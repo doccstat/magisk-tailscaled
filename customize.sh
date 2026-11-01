@@ -9,29 +9,6 @@
 	set
 } || true
 
-# Github download helper
-gh_download() {
-	REPO=$1
-	MATCH=$2
-	DOWNLOAD_URL=$(
-		wget --no-check-certificate --timeout=10 -qO- "https://api.github.com/repos/${REPO}/releases/latest" |
-			grep "browser_download_url" |
-			grep "${MATCH}" |
-			sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/' ||
-			true
-	)
-	if [ -z "$DOWNLOAD_URL" ]; then
-		ui_print "! Unable to get release from https://github.com/${REPO}/releases"
-		return 1
-	fi
-	FILENAME=$(basename "$DOWNLOAD_URL")
-	ui_print "- Downloading $FILENAME..."
-	wget --no-check-certificate --timeout=100 -qO "$TMPDIR/$FILENAME" "$DOWNLOAD_URL" || {
-		ui_print "! Download timeout or failed"
-		return 1
-	}
-}
-
 # shellcheck disable=SC2034
 SKIPUNZIP=1
 # shellcheck disable=SC2034
@@ -52,8 +29,7 @@ TS_BIN_DIR="$TS_DIR/bin"
 TS_SCRIPTS_DIR="$TS_DIR/scripts"
 
 case $ARCH in
-arm) F_ARCH="armv7a" ;;
-arm64) F_ARCH="aarch64" ;;
+arm | arm64) ;;
 *)
 	ui_print "Unsupported architecture: $ARCH"
 	abort
@@ -61,46 +37,41 @@ arm64) F_ARCH="aarch64" ;;
 esac
 ui_print "- Detected architecture: $ARCH"
 
+STAGE=$(mktemp -d "$TMPDIR/tailscale-install.XXXXXX") || abort "error: Unable to create staging directory."
+unzip -p "$ZIPFILE" tailscale/dependencies.sh > "$STAGE/dependencies.sh" || abort "error: Missing dependency pins."
+# shellcheck source=tailscale/dependencies.sh
+. "$STAGE/dependencies.sh" || abort "error: Invalid dependency pins."
+ui_print "- Verifying package and pinned binaries before changing the installation..."
+ts_stage_payload "$ZIPFILE" "$ARCH" "$STAGE/payload" || abort "error: Package verification failed; existing installation unchanged."
+
 if [ -d "$TS_DIR" ]; then
-	[ -f "$TS_DIR/tmp/tailscaled.state" ] && mv -f "$TS_DIR/tmp/tailscaled.state" "$TS_DIR/tailscaled.state"
-	ui_print "- Backup old files"
 	PROP_FILE="$(echo "$MODPATH" | sed 's/_update//')/module.prop"
 	[ ! -f "$PROP_FILE" ] && PROP_FILE="$MODPATH/module.prop"
 	versionCode=$(grep '^versionCode=' "$PROP_FILE" | cut -d= -f2)
-	# shellcheck disable=SC2154
-	rm -rf "$TS_DIR/backups/$versionCode/" && mkdir -p "$TS_DIR/backups/$versionCode/"
+	case "$versionCode" in '' | *[!0-9]*) abort "error: Invalid installed versionCode; refusing backup." ;; esac
+	[ ! -e "$TS_DIR/backups/$versionCode" ] || abort "error: Backup already exists; review it before reinstalling."
+	if [ -f "$TS_DIR/tmp/tailscaled.state" ]; then
+		mv -f "$TS_DIR/tmp/tailscaled.state" "$TS_DIR/tailscaled.state" || abort "error: Unable to preserve state."
+	fi
+	ui_print "- Backup old files"
+	mkdir -p "$TS_DIR/backups/$versionCode/" || abort "error: Unable to create backup directory."
 	for p in "$TS_DIR"/*; do
 		case "$(basename "$p")" in
 		ssh | certs | backups | tailscaled.state) ;;
 		*)
-			mv -f -- "$p" "$TS_DIR/backups/$versionCode/"
+			mv -f -- "$p" "$TS_DIR/backups/$versionCode/" || abort "error: Unable to back up $p."
 			;;
 		esac
 	done
 fi
 
-mkdir -p "$TS_BIN_DIR"
-unzip -qqjo "$ZIPFILE" "tailscale/bin/*-$ARCH" -d "$TS_BIN_DIR" 2>/dev/null || true
-for f in "$TS_BIN_DIR"/*-"$ARCH"; do
-	[ -f "$f" ] && mv "$f" "${f%-"$ARCH"}"
-done
-
-[ -f "$TS_BIN_DIR/tailscaled" ] || {
-	gh_download "anasfanani/tailscale-android-cli" "tailscale_.*_${ARCH}\.tgz" || abort "error: Unable to download."
-	tar -xzf "$TMPDIR/$FILENAME" -C $TS_BIN_DIR || abort "error: Unable extract archive."
-}
-
-[ -f "$TS_BIN_DIR/jq" ] || {
-	gh_download "theshoqanebi/jq-build-for-android" "jq-${F_ARCH}-linux-android" || abort "error: Unable to download."
-	mv -f "$TMPDIR/$FILENAME" "$TS_BIN_DIR/jq" || abort "error: Unable to move file."
-}
-
-ui_print "- Extracting files..."
-unzip -qqo "$ZIPFILE" -x 'META-INF/*' 'tailscale/*' -d "$MODPATH"
-
-mkdir -p "$TS_DIR" "$TS_SCRIPTS_DIR" "$SERVICE_DIR" "$MODPATH/system/bin/"
-unzip -qqjo "$ZIPFILE" 'tailscale/scripts/*' -d "$TS_SCRIPTS_DIR"
-unzip -qqjo "$ZIPFILE" 'tailscale/settings.sh' -d "$TS_DIR"
+ui_print "- Installing verified files..."
+mkdir -p "$TS_BIN_DIR" "$TS_SCRIPTS_DIR" "$SERVICE_DIR" "$MODPATH/system/bin/" || abort "error: Unable to create installation directories."
+cp "$STAGE/payload/bin/"* "$TS_BIN_DIR/" &&
+	cp "$STAGE/payload/scripts/"* "$TS_SCRIPTS_DIR/" &&
+	cp "$STAGE/payload/settings.sh" "$TS_DIR/" &&
+	cp "$STAGE/payload/module/"* "$MODPATH/" || abort "error: Unable to install staged files; inspect the retained backup."
+rm -rf "$STAGE"
 ln -sf "$TS_BIN_DIR/tailscaled" "$TS_BIN_DIR/tailscale"
 ln -sf "$TS_BIN_DIR/"* "$MODPATH/system/bin/"
 

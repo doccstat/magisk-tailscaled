@@ -22,9 +22,58 @@ The [Tailscale app](https://play.google.com/store/apps/details?id=com.tailscale.
 - A basic networking knowledge.
 - An Android device with Magisk root installed.
 
+## Hardened build and installation
+
+This fork hardens the existing build and installer, not the networking implementation.
+Old upstream releases do not contain these changes. Choose either package explicitly:
+
+- **Full ZIP:** includes ARM and ARM64 binaries; installation verifies the selected
+  binaries against the checked-in pins without downloading executables.
+- **Lightweight ZIP:** downloads the same pinned binaries. Requires `curl` with a
+  working CA trust store and HTTPS support. Certificate, redirect, HTTP or checksum
+  failures abort; there is no insecure fallback. Use the full ZIP if curl is unavailable.
+
+Both paths stage all required files and verify binary hashes before changing the existing installation.
+A damaged full ZIP never falls back to downloads. Existing backup directories are not
+silently replaced; review an occupied backup slot before retrying an upgrade. Installation
+is not fully transactional after staging: a later filesystem failure may require recovery
+from the retained backup. Do not install alongside another Tailscale root module.
+
+[Dependency pins](tailscale/dependencies.sh) select Tailscale Android CLI
+`v1.98.8-android` and Android jq `v1.6`, with SHA-256 checks for both release archives
+and installed binaries. These are the releases selected by the previous upstream build,
+now fixed rather than discovered as “latest”. Tailscale's release is labelled **CI Build
+untested**; jq 1.6 is old. Pinning is not a security audit or proof that these binaries
+match reviewed source. Tailscale archive digests were checked against GitHub release
+metadata; jq provides no publisher digest, so its pins were computed from HTTPS downloads.
+Review release provenance and update URLs and all affected hashes together when upgrading.
+
+Build on Linux with Bash, curl, tar, zip/unzip, SHA-256 tools and Python 3:
+
+```sh
+python3 -B -m unittest discover -s tests -v
+./.github/tools/build.sh
+cd "${XDG_CACHE_HOME:-$HOME/.cache}/magisk-tailscaled/dist"
+sha256sum -c *.zip.sha256
+```
+
+The build stages under the cache, packages only allowlisted files, and produces both
+ZIPs and their checksum sidecars. Set `BUILD_DIR` and `DIST_DIR` to choose other locations;
+existing outputs cause an error instead of being overwritten. Version names must match
+`module.prop`; this hardening does not bump the version or publish anything. Checksums
+provide integrity, not publisher authentication: obtain the module ZIP from a trusted source.
+
+Automatic module updates are **disabled** (`updateJson=` in `module.prop`) so an upstream
+update cannot replace this fork's safeguards. Enabling them requires an explicitly reviewed
+fork feed and release; the retained update JSON/version-bump templates still target upstream.
+The tag/manual release workflow still supports version bumps and metadata commits and must
+be reviewed before publication. Networking examples below include legacy upstream userspace
+instructions; the pinned Android daemon tries native TUN first. Device DNS, routing and
+other-VPN coexistence are not validated by the build tests.
+
 ## Quick Start & Installation
 
-1. Download the latest zip file from the [Releases](https://github.com/anasfanani/Magisk-Tailscaled/releases/latest) page.
+1. Build the desired ZIP above, or select a reviewed hardened ZIP from the [fork Releases](https://github.com/doccstat/magisk-tailscaled/releases) page; do not substitute an old upstream release.
 2. Install the downloaded zip file using Magisk & reboot your phone.
 3. Open the Terminal.
 4. Login with `su -c tailscale login`

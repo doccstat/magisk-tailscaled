@@ -22,16 +22,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Test download and packaging safeguards
+        run: python3 -B -m unittest discover -s tests -v
 
       - name: Bump version
         if: github.event_name == 'workflow_dispatch' && inputs.bump != 'none'
-        run: ./.github/tools/version-bump.sh ${{ inputs.bump }}
+        env:
+          BUMP_TYPE: ${{ inputs.bump }}
+        run: ./.github/tools/version-bump.sh "$BUMP_TYPE"
 
       - name: Sync version from tag
         if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
+          [[ "$TAG_VERSION" =~ ^v[0-9]+(\.[0-9]+){3}$ ]] || { echo 'Invalid version tag' >&2; exit 1; }
           CURRENT_VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
           if [[ "$TAG_VERSION" != "$CURRENT_VERSION" ]]; then
             echo "Tag $TAG_VERSION doesn't match module.prop $CURRENT_VERSION, updating..."
@@ -46,7 +54,8 @@ jobs:
         id: version
         run: |
           VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          [[ "$VERSION" =~ ^v[0-9]+(\.[0-9]+){3}$ ]] || { echo 'Invalid module version' >&2; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Check if it's a build release (last digit is not 0)
           BUILD=$(echo "$VERSION" | cut -d'.' -f4)
           if [ "$BUILD" != "0" ]; then
@@ -56,22 +65,29 @@ jobs:
           fi
 
       - name: Build
+        env:
+          BUILD_DIR: ${{ runner.temp }}/magisk-tailscaled/build
+          DIST_DIR: dist
         run: ./.github/tools/build.sh
 
       - name: Create Release
         id: release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Magisk Tailscaled ${{ steps.version.outputs.version }}
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.prerelease }}
           append_body: true
           body: |
             ## Downloads
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip** - Lightweight (downloads binaries on install)
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip** - Complete package (includes all binaries)
+            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip** - Lightweight (pinned, SHA-256-verified HTTPS downloads; requires curl and CA trust)
+            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip** - Offline package (bundled binaries checked against the same pins)
+            - Verify the matching `.zip.sha256` file before installation. These checksums are not publisher signatures; device validation remains required.
             
             ## Download Stats
             ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip?style=flat&logo=docusign&logoColor=green&label=Lightweight)
@@ -81,12 +97,15 @@ jobs:
         env:
           ASSETS: ${{ steps.release.outputs.assets }}
         run: |
-          ZIP_URL=$(echo '${{ steps.release.outputs.assets }}' | jq -r '.[] | select(.name | endswith(".zip") and (contains("-full") | not)) | .browser_download_url')
+          ZIP_URL=$(printf '%s' "$ASSETS" | jq -r '.[] | select(.name | endswith(".zip") and (contains("-full") | not)) | .browser_download_url')
           for json_file in update.json update-arm.json update-arm64.json; do
             jq --arg url "$ZIP_URL" '.zipUrl = $url' "$json_file" > "${json_file}.tmp" && mv "${json_file}.tmp" "$json_file"
           done
 
       - name: Commit changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -94,8 +113,8 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Bump version to ${{ steps.version.outputs.version }}"
-            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-              git push
+            git commit -m "Bump version to $VERSION"
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              git -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' push
             fi
           fi
