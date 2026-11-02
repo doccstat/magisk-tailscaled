@@ -1,120 +1,80 @@
 name: Release
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
-      bump:
-        type: choice
-        description: 'Version bump type'
-        options:
-          - none
-          - major
-          - minor
-          - patch
-          - build
-        default: 'none'
+      version:
+        description: 'Exact module.prop version (existing releases are never replaced)'
+        type: string
+        required: true
+      update_feed_url:
+        description: 'Reviewed stable HTTPS feed URL; empty keeps automatic updates disabled'
+        type: string
+        default: ''
 permissions:
-  contents: write
+  contents: read
+concurrency:
+  group: module-release
+  cancel-in-progress: false
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    if: github.repository == 'doccstat/magisk-tailscaled' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-
-      - name: Test download and packaging safeguards
-        run: python3 -B -m unittest discover -s tests -v
-
-      - name: Bump version
-        if: github.event_name == 'workflow_dispatch' && inputs.bump != 'none'
-        env:
-          BUMP_TYPE: ${{ inputs.bump }}
-        run: ./.github/tools/version-bump.sh "$BUMP_TYPE"
-
-      - name: Sync version from tag
-        if: github.event_name == 'push'
-        run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/}"
-          [[ "$TAG_VERSION" =~ ^v[0-9]+(\.[0-9]+){3}$ ]] || { echo 'Invalid version tag' >&2; exit 1; }
-          CURRENT_VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
-          if [[ "$TAG_VERSION" != "$CURRENT_VERSION" ]]; then
-            echo "Tag $TAG_VERSION doesn't match module.prop $CURRENT_VERSION, updating..."
-            VERSION_NUM=${TAG_VERSION#v}
-            IFS='.' read -r MAJOR MINOR PATCH BUILD <<< "$VERSION_NUM"
-            VERSION_CODE=$(printf "%02d%02d%02d%02d" "$MAJOR" "$MINOR" "$PATCH" "$BUILD")
-            sed -i "s/^version=.*/version=$TAG_VERSION/" module.prop
-            sed -i "s/^versionCode=.*/versionCode=$VERSION_CODE/" module.prop
-          fi
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
-          [[ "$VERSION" =~ ^v[0-9]+(\.[0-9]+){3}$ ]] || { echo 'Invalid module version' >&2; exit 1; }
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Check if it's a build release (last digit is not 0)
-          BUILD=$(echo "$VERSION" | cut -d'.' -f4)
-          if [ "$BUILD" != "0" ]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build
-        env:
-          BUILD_DIR: ${{ runner.temp }}/magisk-tailscaled/build
-          DIST_DIR: dist
-        run: ./.github/tools/build.sh
-
-      - name: Create Release
-        id: release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Magisk Tailscaled ${{ steps.version.outputs.version }}
-          files: |
-            dist/*.zip
-            dist/*.zip.sha256
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          prerelease: ${{ steps.version.outputs.prerelease }}
-          append_body: true
-          body: |
-            ## Downloads
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip** - Lightweight (pinned, SHA-256-verified HTTPS downloads; requires curl and CA trust)
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip** - Offline package (bundled binaries checked against the same pins)
-            - Verify the matching `.zip.sha256` file before installation. These checksums are not publisher signatures; device validation remains required.
-            
-            ## Download Stats
-            ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip?style=flat&logo=docusign&logoColor=green&label=Lightweight)
-            ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip?style=flat&logo=docusign&logoColor=green&label=Full%20Package)
-
-      - name: Update JSON with release URLs
+          go-version: '1.26.10'
+          cache: false
+      - name: Validate explicit version and run tests
         env:
-          ASSETS: ${{ steps.release.outputs.assets }}
+          VERSION: ${{ inputs.version }}
         run: |
-          ZIP_URL=$(printf '%s' "$ASSETS" | jq -r '.[] | select(.name | endswith(".zip") and (contains("-full") | not)) | .browser_download_url')
-          for json_file in update.json update-arm.json update-arm64.json; do
-            jq --arg url "$ZIP_URL" '.zipUrl = $url' "$json_file" > "${json_file}.tmp" && mv "${json_file}.tmp" "$json_file"
-          done
-
-      - name: Commit changes
+          python3 -c 'import os; from tools.build import metadata; assert os.environ["VERSION"] == metadata()["version"]'
+          export GOTMPDIR="$HOME/.cache/t" TMPDIR="$HOME/.cache/t"
+          mkdir -p "$TMPDIR"
+          go test -race ./cmd/tsctl
+          go vet ./cmd/tsctl
+          node --test tests/*.test.js
+          python3 -B -m unittest discover -s tests -v
+      - name: Build source-pinned full and lightweight ZIPs
+        env:
+          VERSION: ${{ inputs.version }}
+          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
+          BUILD_DIR: ${{ runner.temp }}/build
+          DIST_DIR: ${{ runner.temp }}/dist
+        run: |
+          args=(--arch all --format both --payload-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$VERSION")
+          if [[ -n "$UPDATE_FEED_URL" ]]; then
+            args+=(--update-url "$UPDATE_FEED_URL")
+          fi
+          ./.github/tools/build.sh "${args[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-payload
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    environment: release
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload
+          path: ${{ runner.temp }}/dist
+      - name: Publish a new prerelease without changing existing releases or branches
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add module.prop update*.json CHANGELOG.md
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Bump version to $VERSION"
-            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-              git -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' push
-            fi
-          fi
+          RELEASE_VERSION: ${{ inputs.version }}
+          DIST_DIR: ${{ runner.temp }}/dist
+        run: python3 -B tools/release.py

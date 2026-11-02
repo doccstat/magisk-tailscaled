@@ -8,15 +8,32 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Test download and packaging safeguards
-        run: python3 -B -m unittest discover -s tests -v
-      - name: Build both ZIPs from pinned release assets
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Host regression tests
+        run: |
+          export GOTMPDIR="$HOME/.cache/t" TMPDIR="$HOME/.cache/t"
+          mkdir -p "$TMPDIR"
+          go test -race ./cmd/tsctl
+          go vet ./cmd/tsctl
+          node --test tests/*.test.js
+          python3 -B -m unittest discover -s tests -v
+      - name: Build both architectures from pinned source
         env:
-          BUILD_DIR: ${{ runner.temp }}/magisk-tailscaled/build
-          DIST_DIR: ${{ runner.temp }}/magisk-tailscaled/dist
-        run: ./.github/tools/build.sh
+          BUILD_DIR: ${{ runner.temp }}/build
+          DIST_DIR: ${{ runner.temp }}/dist
+        run: ./.github/tools/build.sh --arch all --format full
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: review-only-modules
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 7

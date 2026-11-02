@@ -1,0 +1,82 @@
+--- a/net/netmon/netmon_linux.go
++++ b/net/netmon/netmon_linux.go
+@@ -6,6 +6,7 @@
+ package netmon
+ 
+ import (
++	"errors"
+ 	"net"
+ 	"net/netip"
+ 	"time"
+@@ -93,6 +94,15 @@
+ 		var err error
+ 		c.buffered, err = c.conn.Receive()
+ 		if err != nil {
++			if errors.Is(err, unix.ENOBUFS) {
++				// Lost notifications invalidate duplicate-address suppression.
++				// A non-ignored event makes pump poll the current interfaces,
++				// even if no further notifications arrive after wake-up.
++				clear(c.addrCache)
++				c.buffered = nil
++				c.logf("netlink buffer overflow; resynchronizing interface state")
++				return unspecifiedMessage{}, nil
++			}
+ 			return nil, err
+ 		}
+ 		if len(c.buffered) == 0 {
+@@ -232,18 +242,13 @@
+ 	case unix.RTM_DELRULE:
+ 		// For https://github.com/tailscale/tailscale/issues/1591 where
+ 		// systemd-networkd deletes our rules.
+-		var rmsg rtnetlink.RouteMessage
+-		err := rmsg.UnmarshalBinary(msg.Data)
++		rd, relevant, err := decodeRuleDeleted(msg.Data)
+ 		if err != nil {
+ 			c.logf("ip rule deleted; failed to parse netlink message: %v", err)
+-		} else {
+-			c.logf("ip rule deleted: %+v", rmsg)
+-			// On `ip -4 rule del pref 5210 table main`, logs:
+-			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
+-		}
+-		rd := RuleDeleted{
+-			Table:    rmsg.Table,
+-			Priority: rmsg.Attributes.Priority,
++			return unspecifiedMessage{}, nil
++		}
++		if !relevant {
++			return ignoreMessage{}, nil
+ 		}
+ 		c.rulesDeleted.Publish(rd)
+ 		if debugNetlinkMessages() {
+@@ -260,6 +265,31 @@
+ 	}
+ }
+ 
++// Rules and routes have different attribute ABIs: FRA_UID_RANGE (20) is
++// eight bytes, whereas RTA_PREF (20) is one byte. Never decode a rule as a route.
++func decodeRuleDeleted(data []byte) (RuleDeleted, bool, error) {
++	var msg rtnetlink.RuleMessage
++	if err := msg.UnmarshalBinary(data); err != nil {
++		return RuleDeleted{}, false, err
++	}
++	table := uint32(msg.Table)
++	var priority uint32
++	if msg.Attributes != nil {
++		if msg.Attributes.Table != nil {
++			table = *msg.Attributes.Table
++		}
++		if msg.Attributes.Priority != nil {
++			priority = *msg.Attributes.Priority
++		}
++	}
++	// RuleDeleted only represents the small table IDs used by Tailscale.
++	// Do not truncate Android's extended IDs into unrelated small tables.
++	if table > 255 {
++		return RuleDeleted{}, false, nil
++	}
++	return RuleDeleted{Table: uint8(table), Priority: priority}, true, nil
++}
++
+ func netaddrIP(std net.IP) netip.Addr {
+ 	ip, _ := netip.AddrFromSlice(std)
+ 	return ip.Unmap()

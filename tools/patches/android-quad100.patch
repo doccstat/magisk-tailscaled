@@ -1,0 +1,161 @@
+--- a/net/dns/manager.go
++++ b/net/dns/manager.go
+@@ -12,6 +12,7 @@
+ 	"io"
+ 	"net"
+ 	"net/netip"
++	"os"
+ 	"runtime"
+ 	"slices"
+ 	"strings"
+@@ -312,8 +313,19 @@
+ 
+ 	// Similarly, the OS always gets search paths.
+ 	ocfg.SearchDomains = cfg.SearchDomains
++	if m.goos == "android" && os.Getenv("TS_MODULE_SEARCH") == "true" {
++		rcfg.SearchDomains = cfg.SearchDomains
++	}
+ 	if propagateHostsToOS && m.goos == "windows" {
+ 		ocfg.Hosts = compileHostEntries(cfg)
++	}
++
++	// Root capture targets quad-100 even for a plain global IP resolver.
++	if m.goos == "android" && cfg.hasDefaultResolvers() {
++		rcfg.Routes = routes
++		rcfg.Routes["."] = cfg.DefaultResolvers
++		ocfg.Nameservers = cfg.serviceIPs(m.knobs)
++		return rcfg, ocfg, nil
+ 	}
+ 
+ 	// Deal with trivial configs first.
+--- a/net/dns/manager_android.go
++++ b/net/dns/manager_android.go
+@@ -7,6 +7,7 @@
+ 
+ import (
+ 	"github.com/coreos/go-iptables/iptables"
++	"os"
+ 	"tailscale.com/control/controlknobs"
+ 	"tailscale.com/health"
+ 	"tailscale.com/net/tsaddr"
+@@ -21,6 +22,10 @@
+ }
+ 
+ func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ *eventbus.Bus, _ policyclient.Client, _ *controlknobs.Knobs, _ string) (OSConfigurator, error) {
++	// The module controller journals and owns opt-in UDP/TCP capture.
++	if os.Getenv("TS_MODULE_DNS") == "true" {
++		return noopManager{}, nil
++	}
+ 	return &androidManager{logf: logf}, nil
+ }
+ 
+--- a/net/dns/resolver/tsdns.go
++++ b/net/dns/resolver/tsdns.go
+@@ -70,6 +70,8 @@
+ // Else forward the query to the most specific matching entry in Routes.
+ // Else return SERVFAIL.
+ type Config struct {
++	// Optional search expansion for Android root-captured single-label queries.
++	SearchDomains []dnsname.FQDN
+ 	// True if [Prefs.CorpDNS] is true or --accept-dns=true was specified.
+ 	// This should only be used for error handling and health reporting.
+ 	AcceptDNS bool
+@@ -226,6 +228,7 @@
+ 	// mu guards the following fields from being updated while used.
+ 	mu             syncs.Mutex
+ 	localDomains   []dnsname.FQDN
++	searchDomains  []dnsname.FQDN
+ 	hostToIP       map[dnsname.FQDN][]netip.Addr
+ 	ipToHost       map[netip.Addr]dnsname.FQDN
+ 	subdomainHosts set.Set[dnsname.FQDN]
+@@ -287,6 +290,7 @@
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+ 	r.localDomains = cfg.LocalDomains
++	r.searchDomains = append(r.searchDomains[:0], cfg.SearchDomains...)
+ 	r.hostToIP = cfg.Hosts
+ 	r.ipToHost = reverse
+ 	r.subdomainHosts = cfg.SubdomainHosts
+@@ -337,6 +341,10 @@
+ 		metricDNSQueryErrorClosed.Add(1)
+ 		return nil, net.ErrClosed
+ 	default:
++	}
++
++	if out, ok, err := r.querySearchDomains(ctx, bs, family, from); ok {
++		return out, err
+ 	}
+ 
+ 	out, err := r.respond(bs)
+@@ -358,6 +366,71 @@
+ 
+ 	out = checkResponseSizeAndSetTC(out, bs, family, r.logf)
+ 	return out, nil
++}
++
++// Try configured suffixes in order without changing the question seen by the app.
++func (r *Resolver) querySearchDomains(ctx context.Context, query []byte, family string, from netip.AddrPort) ([]byte, bool, error) {
++	var original dns.Message
++	if err := original.Unpack(query); err != nil || original.Response || len(original.Questions) != 1 {
++		return nil, false, nil
++	}
++	question := original.Questions[0]
++	short := strings.TrimSuffix(question.Name.String(), ".")
++	if short == "" || strings.Contains(short, ".") {
++		return nil, false, nil
++	}
++	r.mu.Lock()
++	suffixes := append([]dnsname.FQDN(nil), r.searchDomains...)
++	r.mu.Unlock()
++	ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
++	defer cancel()
++	var last []byte
++	seen := map[dnsname.FQDN]bool{}
++	for _, suffix := range suffixes {
++		if suffix == "" || suffix == "." || seen[suffix] {
++			continue
++		}
++		seen[suffix] = true
++		name, err := dns.NewName(short + "." + string(suffix))
++		if err != nil {
++			continue
++		}
++		candidate := original
++		candidate.Questions = []dns.Question{{Name: name, Type: question.Type, Class: question.Class}}
++		packed, err := candidate.Pack()
++		if err != nil {
++			return nil, false, nil
++		}
++		response, err := r.Query(ctx, packed, family, from)
++		if err != nil {
++			return nil, true, err
++		}
++		var message dns.Message
++		if err = message.Unpack(response); err != nil {
++			return nil, true, err
++		}
++		if !message.Response || message.ID != original.ID || len(message.Questions) != 1 || !strings.EqualFold(message.Questions[0].Name.String(), name.String()) || message.Questions[0].Type != question.Type || message.Questions[0].Class != question.Class {
++			return nil, true, errors.New("invalid search DNS response")
++		}
++		message.Questions[0].Name = question.Name
++		// Link the original name to the answer owner; question-only rewrites
++		// produce answers strict resolvers cannot associate with their query.
++		if message.RCode == dns.RCodeSuccess && len(message.Answers) != 0 {
++			alias := dns.Resource{Header: dns.ResourceHeader{Name: question.Name, Class: question.Class}, Body: &dns.CNAMEResource{CNAME: name}}
++			message.Answers = append([]dns.Resource{alias}, message.Answers...)
++		}
++		message.AuthenticData = false // The synthesized name is not DNSSEC-authenticated.
++		message.Authoritative = false
++		last, err = message.Pack()
++		if err != nil {
++			return nil, true, err
++		}
++		last = checkResponseSizeAndSetTC(last, query, family, r.logf)
++		if message.RCode != dns.RCodeNameError {
++			return last, true, nil
++		}
++	}
++	return last, last != nil, nil
+ }
+ 
+ // GetUpstreamResolvers returns the resolvers that would be used to resolve

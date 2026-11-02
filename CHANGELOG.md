@@ -1,14 +1,25 @@
 ## Unreleased
 
-- Pin ARM/ARM64 Tailscale Android CLI 1.98.8 and jq 1.6 downloads and installed
-  binaries by SHA-256. Require certificate-verified HTTPS for lightweight installs;
-  retain full ZIPs for installations without curl.
-- Stage and verify required files before touching the existing installation;
-  reject corrupt full packages and refuse to overwrite existing backup slots.
-- Build from an explicit file allowlist in disposable staging, refuse output
-  overwrites, and include ZIP checksum sidecars. Pin CI actions and run host tests.
-- Disable the upstream automatic-update feed pending a reviewed fork release.
-  No module version bump, runtime networking change or device validation is included.
+- Restore the manager WebUI, official browser login and typed settings/diagnostics.
+- Use a serialized controller with PID/start-time/executable ownership checks,
+  persistent Stop/Disconnect, bounded crash recovery and 512 KiB rotating logs.
+- Require an explicit conservative-new or preserve-existing first-run policy.
+  Uninstall retains identity/preferences; erasure requires exact confirmation.
+  Legacy launchers/identity locations require explicit retirement/migration.
+- Make app and interface-scoped hotspot UDP/TCP DNS capture separate opt-ins,
+  with root bypass, owned-chain journaling/cleanup and native DNS policy.
+  Search-suffix expansion and userspace fallback are also opt-in.
+- Build patched Tailscale Android CLI 1.98.8 and the controller from pinned source,
+  Go 1.26.10 and NDK r27c (ARM32). Rebase DNS and netlink recovery patches and run
+  targeted source tests. Remove upstream daemon/jq prebuilt downloads.
+- Verify staged payloads before stopping an installed service. Full offline ZIPs
+  and explicitly hosted lightweight payloads carry checksums, provenance, dependency
+  reports, patches and licenses. Deterministic ZIP metadata; no output overwrites.
+- Keep automatic updates off unless an explicit reviewed feed is selected. Remove
+  upstream update templates and automatic version/metadata commits. Separate
+  read-only build CI from guarded manual, non-replacing prerelease publication.
+- Module version remains unchanged; no device installation, migration, compatibility
+  validation or publication is implied by these source changes.
 
 ## v2.0.0.1
 
