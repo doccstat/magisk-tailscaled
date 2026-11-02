@@ -1,6 +1,4 @@
 #!/system/bin/sh
-rm -rf /data/adb/tailscale
-SERVICE_DIR="/data/adb/service.d"
-if [ -f "$SERVICE_DIR/tailscaled_service.sh" ]; then
-    rm -f "$SERVICE_DIR/tailscaled_service.sh"
-fi
+MODDIR=${0%/*}
+# Preserve identity, preferences, logs and backups. Erasure requires explicit CLI/UI confirmation.
+"$MODDIR/bin/tsctl" stop || echo "Could not stop the owned service. Reboot to clear remaining routes; state was retained."
