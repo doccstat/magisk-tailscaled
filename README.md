@@ -165,8 +165,16 @@ rewritten. It emits update metadata but does not upload/host the feed. A feed
 pointing to a fixed release does not discover future releases. Change versions
 and release notes explicitly; the old automatic version/commit-back tool is gone.
 
-The read-only CI workflow builds review artifacts for both architectures. The
-separate manual release workflow validates an exact version, builds without write
+The [Test workflow](https://github.com/doccstat/magisk-tailscaled/actions/workflows/test.yml)
+automatically tests and builds a full ARMv7/ARM64 module ZIP on every `main` push
+and pull request; **Run workflow** also starts a build manually. To download one,
+sign in to GitHub, open a successful run and select **Artifacts → review-only-modules**
+(retained for seven days). Extract that outer artifact archive, verify the included
+SHA-256 sidecar, and select the inner `Magisk-Tailscaled-<version>-full.zip` in
+Magisk or KernelSU. Do not install the outer artifact archive. These are experimental
+builds, not device-tested releases or automatic manager updates.
+
+The separate manual release workflow validates an exact version, builds without write
 credentials, then uses the `release` environment to publish only a new prerelease.
 Configure required reviewers on that environment before use. Existing releases,
 tags at other commits and superseded builds are refused; branches are never
