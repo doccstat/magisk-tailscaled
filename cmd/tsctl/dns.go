@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -263,32 +264,32 @@ func (a app) readDNSBackend() (ts tailStatus, p prefs, err error) {
 	if a.dnsBackend != nil {
 		return a.dnsBackend()
 	}
+	// Decode ONLY typed fields. Raw prefs and network maps contain secrets and
+	// must not be logged or sent to WebUI, even when a request fails.
+	if err = a.readLocalAPI("status", &ts); err == nil {
+		err = a.readLocalAPI("prefs", &p)
+	}
+	return ts, p, err
+}
+
+func (a app) readLocalAPI(endpoint string, out any) error {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", a.file("tailscaled.sock"))
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
-	// Decode ONLY typed fields. Raw prefs and network maps contain secrets and
-	// must not be logged or sent to WebUI, even when a request fails.
-	for _, endpoint := range []struct {
-		name string
-		out  any
-	}{{"status", &ts}, {"prefs", &p}} {
-		resp, e := client.Get("http://local-tailscaled.sock/localapi/v0/" + endpoint.name)
-		if e != nil {
-			return ts, p, fmt.Errorf("read Tailscale %s: %w", endpoint.name, e)
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return ts, p, fmt.Errorf("read Tailscale %s: HTTP %d", endpoint.name, resp.StatusCode)
-		}
-		e = json.NewDecoder(resp.Body).Decode(endpoint.out)
-		resp.Body.Close()
-		if e != nil {
-			return ts, p, fmt.Errorf("invalid Tailscale %s response", endpoint.name)
-		}
+	resp, err := client.Get("http://local-tailscaled.sock/localapi/v0/" + endpoint)
+	if err != nil {
+		return fmt.Errorf("read Tailscale %s: %w", endpoint, err)
 	}
-	return ts, p, nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("read Tailscale %s: HTTP %d", endpoint, resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out); err != nil {
+		return fmt.Errorf("invalid Tailscale %s response", endpoint)
+	}
+	return nil
 }
 
 func (a app) reconcileDNSRedirect() error {

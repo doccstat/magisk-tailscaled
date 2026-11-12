@@ -73,6 +73,10 @@ There is no TCP control server or bundled remote UI code. The browser launcher
 accepts only official hosted Tailscale login URLs; custom control-server login
 requires the CLI and manual review of its URL.
 
+**DNS does not require an exit node.** For Android app lookups, enable both
+**Accept tailnet DNS** and **Capture app DNS**. **Allow local network access** is
+only an exit-node routing preference; it is unrelated to DNS.
+
 Every additional module networking option defaults **off**:
 
 | Option (`tsctl set NAME VALUE`) | Effect |
@@ -190,8 +194,29 @@ file. Review diagnostics before sharing: names, addresses and login URLs can be
 sensitive. On a failed stop or broken routing, disable the module and reboot;
 do not kill every Tailscale process or flush shared firewall tables.
 
+To share a diagnostic report, open **Logs & diagnostics**, optionally enter the
+failing DNS hostname, choose **Export file**, and tap **Export diagnostics**.
+The visible default is `/sdcard/Download/magisk-tailscaled-diagnostics.json`.
+Use your file manager to share it; choose another filename if it already exists.
+The exporter uses exactly the path entered and never replaces an existing file.
+
+Reports include versions/build metadata, saved preferences, DNS policy, Android
+Private DNS/resolver state, owned firewall counters, routes, errors and bounded
+recent logs. Credentials are removed and names/addresses are consistently
+pseudonymized within each report. **Recent logs** displays the original log.
+The optional hostname test queries Tailscale's internal resolver for A/AAAA
+records; it helps distinguish resolver failures from Android app capture failures.
+Leaving it empty collects configuration without issuing DNS queries.
+
+CLI equivalents, in a root shell (the hostname is optional):
+
+```sh
+"$CTL" diagnostics service.example.com
+"$CTL" export-diagnostics /sdcard/Download/tailscale-report.json service.example.com
+```
+
 Report issues to the [fork](https://github.com/doccstat/magisk-tailscaled/issues)
-with manager/Android versions and redacted diagnostics. Host tests do not establish
+with manager/Android versions and the exported report. Host tests do not establish
 Magisk/KernelSU installation, boot recovery, ARM32 execution, SSH, hotspot, battery,
 private/short-name DNS, Android Auto or other-VPN compatibility.
 

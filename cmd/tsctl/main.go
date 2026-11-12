@@ -66,7 +66,7 @@ func main() {
 		fatal(err)
 	}
 	if len(os.Args) < 2 {
-		fatal(errors.New("usage: tsctl status|initialize conservative|initialize preserve|start|stop|restart|connect|disconnect|logout|set <name> <value>|logs|diagnostics|purge erase-identity"))
+		fatal(errors.New("usage: tsctl status|initialize conservative|initialize preserve|start|stop|restart|connect|disconnect|logout|set <name> <value>|logs|diagnostics [dns-name]|export-diagnostics <absolute-path> [dns-name]|purge erase-identity"))
 	}
 	if os.Args[1] == "supervise-loop" {
 		if err = a.superviseLoop(); err != nil {
@@ -649,6 +649,22 @@ func (a app) dispatch(args []string) (any, error) {
 		if _, err := settingArgs(args[1], args[2]); err != nil {
 			return nil, err
 		}
+	} else if name == "diagnostics" || name == "export-diagnostics" {
+		minArgs := 1
+		if name == "export-diagnostics" {
+			minArgs = 2
+		}
+		if len(args) < minArgs || len(args) > minArgs+1 {
+			return nil, errors.New("usage: tsctl diagnostics [dns-name] | export-diagnostics <absolute-path> [dns-name]")
+		}
+		query := ""
+		if len(args) == minArgs+1 {
+			query = args[minArgs]
+		}
+		if name == "export-diagnostics" {
+			return a.exportDiagnostics(args[1], query)
+		}
+		return a.diagnostics(query)
 	} else if name == "initialize" {
 		if len(args) != 2 || (args[1] != "conservative" && args[1] != "preserve") {
 			return nil, errors.New("choose initialize conservative|preserve")
@@ -672,10 +688,6 @@ func (a app) dispatch(args []string) (any, error) {
 			b = b[len(b)-32768:]
 		}
 		return map[string]string{"text": string(b)}, err
-	case "diagnostics":
-		return map[string]any{"status": a.status(), "addresses": command(3*time.Second, "/system/bin/ip", "addr", "show", "tailscale0"),
-			"rules4": command(3*time.Second, "/system/bin/ip", "-4", "rule", "show"), "rules6": command(3*time.Second, "/system/bin/ip", "-6", "rule", "show"),
-			"routes4": command(3*time.Second, "/system/bin/ip", "-4", "route", "show", "table", "52"), "routes6": command(3*time.Second, "/system/bin/ip", "-6", "route", "show", "table", "52")}, nil
 	case "start", "boot", "stop", "restart", "connect", "disconnect", "logout", "set", "initialize", "purge":
 	default:
 		return nil, errors.New("unsupported command")

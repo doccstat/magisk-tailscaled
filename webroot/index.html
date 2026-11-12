@@ -24,12 +24,12 @@
     <section>
       <h2>Routing &amp; privacy</h2>
       <label class="toggle"><span>Accept subnet routes<small>Reach networks advertised by your other devices. Overlapping routes can affect local Wi-Fi.</small></span><input type="checkbox" data-setting="accept-routes" id="routes"></label>
-      <label class="toggle"><span>Accept tailnet DNS<small>Use the tailnet's resolver policy. App/hotspot capture below are separate opt-ins. Native TUN and a reachable global override or exit-node DNS are needed for general lookups.</small></span><input type="checkbox" data-setting="accept-dns" id="accept-dns"></label>
+      <label class="toggle"><span>Accept tailnet DNS<small>Use the tailnet's resolver policy. Enable Capture app DNS below for Android apps. No exit node is required.</small></span><input type="checkbox" data-setting="accept-dns" id="accept-dns"></label>
       <label class="toggle"><span>Block incoming connections<small>Keep this on unless other tailnet devices need to reach services on this phone.</small></span><input type="checkbox" data-setting="shields-up" id="shields"></label>
       <label class="toggle"><span>Tailscale SSH<small>Allow only as permitted by your tailnet policy.</small></span><input type="checkbox" data-setting="ssh" id="ssh"></label>
       <label for="exit-node">Exit node<small>Use another device for Internet traffic. “None” keeps normal Internet routing.</small></label>
       <div class="input-row"><select id="exit-node"><option value="">None</option></select><button id="save-exit">Apply</button></div>
-      <label class="toggle"><span>Allow local network access<small>Recommended for wireless Android Auto when using an exit node. Phone/car compatibility still needs testing.</small></span><input type="checkbox" data-setting="exit-node-allow-lan-access" id="lan"></label>
+      <label class="toggle"><span>Allow local network access<small>Only applies while using an exit node. Select and apply one to change this setting; it does not enable DNS.</small></span><input type="checkbox" data-setting="exit-node-allow-lan-access" id="lan"></label>
       <label for="hostname">Device name</label><div class="input-row"><input id="hostname" maxlength="63" placeholder="my-phone" autocomplete="off" spellcheck="false"><button id="save-hostname">Save</button></div>
       <p class="muted">Tailnet DNS follows the admin console's global and split-DNS settings.</p>
     </section>
@@ -44,7 +44,15 @@
       <div class="actions"><button data-command="start">Start service</button><button data-command="restart">Restart</button><button data-command="stop">Stop service</button><button data-command="logout" class="danger">Sign out</button></div>
       <p class="muted">Stopping persists across reboots. After Disconnect, use Connect rather than Start to resume. Signing out expires this device’s session.</p>
     </section>
-    <details><summary>Logs &amp; diagnostics</summary><p class="muted">These can contain device names, addresses and sign-in links. Review before sharing.</p><div class="actions"><button data-command="logs">Recent logs</button><button data-command="diagnostics">Diagnostics</button></div><pre id="output">Choose a report.</pre></details>
+    <details><summary>Logs &amp; diagnostics</summary>
+      <p class="muted">Diagnostics redact credentials, names and network addresses. Recent logs are unredacted. Reports stay on this device until you share them.</p>
+      <label for="diagnostic-name">DNS test hostname (optional)<small>Queries this exact name through Tailscale's resolver; no exit node needed. Leave empty for configuration only.</small></label>
+      <div class="input-row"><input id="diagnostic-name" placeholder="service.example.com" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
+      <label for="diagnostic-path">Export file<small>Choose an absolute path. Existing files will not be replaced.</small></label>
+      <div class="input-row"><input id="diagnostic-path" value="/sdcard/Download/magisk-tailscaled-diagnostics.json" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
+      <div class="actions"><button data-command="logs">Recent logs</button><button data-command="diagnostics">Diagnostics</button><button data-command="export-diagnostics">Export diagnostics</button></div>
+      <pre id="output">Choose a report.</pre>
+    </details>
     <details><summary>Erase saved state</summary><p>Uninstall preserves identity and preferences. Erasing here stops the service and permanently deletes ALL module state, logs and backups. Revoke the device in the tailnet admin console separately.</p><button id="purge" class="danger">Erase saved state…</button></details>
     <footer id="version">Magisk Tailscaled · Independent community module</footer>
   </main>

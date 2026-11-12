@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Add local JSON diagnostic export with an explicit output path, redaction,
+  bounded logs, DNS configuration, Android resolver state and capture counters.
+  An optional hostname test checks A/AAAA through Tailscale without an exit node.
+- Clarify that app DNS needs both DNS switches, not exit-node selection.
 - Restore the manager WebUI, official browser login and typed settings/diagnostics.
 - Use a serialized controller with PID/start-time/executable ownership checks,
   persistent Stop/Disconnect, bounded crash recovery and 512 KiB rotating logs.
