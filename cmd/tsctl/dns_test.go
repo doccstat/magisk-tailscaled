@@ -92,7 +92,7 @@ func runningDNSStatus() tailStatus {
 func TestDNSBridgeReconcileAndRepair(t *testing.T) {
 	a, f := dnsTestApp(t)
 	ts := runningDNSStatus()
-	p := prefs{CorpDNS: true, ExitNodeID: "selected-exit"}
+	p := prefs{CorpDNS: true} // DNS capture must work without an exit node.
 	if err := a.reconcileDNSLocked(ts, p); err != nil {
 		t.Fatal(err)
 	}

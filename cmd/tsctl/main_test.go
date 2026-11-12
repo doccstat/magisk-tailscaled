@@ -80,6 +80,11 @@ func TestMain(m *testing.M) {
 				os.Stdout.Write(b)
 			case "debug":
 				os.Stdout.WriteString(`{"CorpDNS":false,"ShieldsUp":true,"Persist":{"PrivateNodeKey":"do-not-expose"}}`)
+			case "dns":
+				if len(os.Args) != 7 || os.Args[3] != "query" || os.Args[4] != "--json" {
+					os.Exit(7)
+				}
+				json.NewEncoder(os.Stdout).Encode(map[string]any{"Name": os.Args[5], "QueryType": os.Args[6], "ResponseCode": "RCodeSuccess", "Resolvers": []map[string]string{{"Addr": "100.64.0.53"}}})
 			}
 			os.Exit(0)
 		}

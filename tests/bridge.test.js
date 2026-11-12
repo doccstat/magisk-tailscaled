@@ -15,6 +15,12 @@ test('shell quoting preserves hostile input as one literal argument', () => {
   assert.throws(() => commandFor(['initialize', 'guess']));
   assert.match(commandFor(['initialize', 'preserve']), /'initialize' 'preserve'$/);
   assert.match(commandFor(['purge', 'erase-identity']), /'purge' 'erase-identity'$/);
+  assert.match(commandFor(['diagnostics', 'Service.Example.']), /'diagnostics' 'Service.Example\.'$/);
+  const path = "/sdcard/Download/诊断'; $(id).json";
+  assert.equal(commandFor(['export-diagnostics', path, 'Service.Example.']), `${commandFor(['diagnostics']).replace("'diagnostics'", "'export-diagnostics'")} ${quote(path)} 'Service.Example.'`);
+  assert.throws(() => commandFor(['export-diagnostics']));
+  assert.throws(() => commandFor(['export-diagnostics', path, '', 'extra']));
+  assert.throws(() => commandFor(['diagnostics', 'name', 'extra']));
 });
 test('sign-in only opens official HTTPS browser URLs', () => {
   assert.equal(loginURL('https://login.tailscale.com/a/abc'), 'https://login.tailscale.com/a/abc');

@@ -1,11 +1,13 @@
 // Uses the KernelSU exec callback protocol; no remote scripts or HTTP server.
 export const helper = '/data/adb/modules/magisk-tailscaled/bin/tsctl';
 export function quote(value) { return "'" + String(value).replaceAll("'", "'\\''") + "'"; }
-const operations = new Set(['status', 'start', 'stop', 'restart', 'connect', 'disconnect', 'logout', 'set', 'logs', 'diagnostics', 'initialize', 'purge']);
+const operations = new Set(['status', 'start', 'stop', 'restart', 'connect', 'disconnect', 'logout', 'set', 'logs', 'diagnostics', 'export-diagnostics', 'initialize', 'purge']);
 const settings = new Set(['accept-routes', 'shields-up', 'exit-node-allow-lan-access', 'accept-dns', 'hostname', 'exit-node', 'ssh', 'capture-dns', 'hotspot-dns', 'hotspot-interface', 'search-domains', 'userspace-fallback']);
 export function commandFor(args) {
   if (!Array.isArray(args) || !operations.has(args[0])) throw new Error('Unsupported operation');
   const valid = args[0] === 'set' ? args.length === 3 && settings.has(args[1])
+    : args[0] === 'diagnostics' ? args.length === 1 || args.length === 2
+    : args[0] === 'export-diagnostics' ? args.length === 2 || args.length === 3
     : args[0] === 'initialize' ? args.length === 2 && ['conservative', 'preserve'].includes(args[1])
     : args[0] === 'purge' ? args.length === 2 && args[1] === 'erase-identity'
     : args.length === 1;

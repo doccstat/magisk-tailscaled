@@ -71,8 +71,12 @@ async function run(args, silent = false) {
     if (args[0] === 'logs' || args[0] === 'diagnostics') {
       $('output').textContent = result.text || JSON.stringify(result, null, 2);
       message('Report refreshed.');
+    } else if (args[0] === 'export-diagnostics') {
+      $('output').textContent = `Diagnostics saved to ${result.path}`;
+      message($('output').textContent);
     } else {
-      message(''); render(result);
+      if (!silent) message('');
+      render(result);
       if (args[0] === 'connect') setTimeout(() => run(['status'], true), 1500);
     }
   } catch (error) { message(error.message, true); }
@@ -83,7 +87,10 @@ $('refresh').addEventListener('click', () => run(['status']));
 document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => {
   const action = button.dataset.command;
   if (action === 'logout' && !confirm('Sign out and expire this device’s Tailscale session?')) return;
-  run([action]);
+  const args = [action];
+  if (action === 'export-diagnostics') args.push($('diagnostic-path').value);
+  if ((action === 'diagnostics' || action === 'export-diagnostics') && $('diagnostic-name').value !== '') args.push($('diagnostic-name').value);
+  run(args);
 }));
 document.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('change', async () => {
   await run(['set', input.dataset.setting, String(input.checked)]);
