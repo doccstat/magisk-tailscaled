@@ -13,22 +13,68 @@ import (
 	"testing"
 )
 
-// Model only our NAT chain and OUTPUT jump. No test executes a firewall tool.
+// Model owned chains, policy rules and routes. No test executes a network tool.
 type fakeDNSFirewall struct {
 	rules     map[string][]string
 	jumps     map[string]bool
 	mutations int
+	routes    map[string]string
+	policy    map[string]string
+	noIPv6NAT bool
 	fail      func(string, []string) bool
 }
 
 func dnsTestApp(t *testing.T) (app, *fakeDNSFirewall) {
 	t.Helper()
-	f := &fakeDNSFirewall{rules: map[string][]string{}, jumps: map[string]bool{}}
+	f := &fakeDNSFirewall{rules: map[string][]string{}, jumps: map[string]bool{}, routes: map[string]string{}, policy: map[string]string{}}
 	a := app{base: t.TempDir(), module: t.TempDir(), tunPresent: func() bool { return true }}
 	_ = a.write("module-options.json", []byte(`{"captureDNS":true}`))
 	a.android = func(tool string, args ...string) ([]byte, error) {
-		if !slices.Equal(args[:4], []string{"-w", "1", "-t", "nat"}) {
+		if tool == "ip" {
+			if f.fail != nil && f.fail(tool, args) {
+				return nil, errors.New("injected route failure")
+			}
+			if strings.Join(args, " ") == "link show dev "+dnsCaptureInterface {
+				return []byte("tsdns0: UP"), nil
+			}
+			family, kind, action := args[0], args[1], args[2]
+			var state map[string]string
+			switch kind {
+			case "route":
+				state = f.routes
+			case "rule":
+				state = f.policy
+			default:
+				t.Fatalf("unexpected ip command: %v", args)
+			}
+			switch action {
+			case "show":
+				return []byte(state[family]), nil
+			case "add":
+				if state[family] != "" {
+					return nil, errors.New("already exists")
+				}
+				if kind == "route" {
+					state[family] = "default dev tsdns0 proto static metric 1"
+				} else {
+					state[family] = "12400: from all fwmark 0x40000000/0x40000000 lookup 5300"
+				}
+			case "del":
+				delete(state, family)
+			default:
+				t.Fatalf("unexpected ip action: %v", args)
+			}
+			f.mutations++
+			return nil, nil
+		}
+		if len(args) < 5 || !slices.Equal(args[:3], []string{"-w", "1", "-t"}) || (args[3] != "nat" && args[3] != "mangle") {
 			t.Fatalf("unexpected firewall scope: %v", args)
+		}
+		if args[3] == "nat" {
+			if tool == "ip6tables" && f.noIPv6NAT {
+				return nil, errors.New("can't initialize ip6tables table `nat': Table does not exist")
+			}
+			tool += "/nat"
 		}
 		args = args[4:]
 		if f.fail != nil && f.fail(tool, args) {
@@ -96,13 +142,13 @@ func TestDNSBridgeReconcileAndRepair(t *testing.T) {
 	if err := a.reconcileDNSLocked(ts, p); err != nil {
 		t.Fatal(err)
 	}
-	for tool, target := range map[string]string{"iptables": "100.100.100.100:53", "ip6tables": "[fd7a:115c:a1e0::53]:53"} {
+	for _, tool := range []string{"iptables", "ip6tables"} {
 		rules := f.rules[tool]
 		if !f.jumps[tool] || len(rules) != 4 || rules[0] != "-m owner --uid-owner 0 -j RETURN" {
 			t.Fatalf("missing loop exemption or jump: %s %v", tool, rules)
 		}
 		for i, proto := range []string{"udp", "tcp"} {
-			if rules[i+2] != fmt.Sprintf("-p %s --dport 53 -j DNAT --to-destination %s", proto, target) {
+			if rules[i+2] != fmt.Sprintf("-p %s --dport 53 -j MARK --set-xmark %s", proto, dnsCaptureMark) {
 				t.Fatalf("unexpected DNS capture: %v", rules)
 			}
 		}
@@ -171,7 +217,7 @@ func TestDNSBridgeInactiveCleanup(t *testing.T) {
 			if (err != nil) != wantError {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if f.jumps["iptables"] || f.jumps["ip6tables"] || len(f.rules) != 0 || exists(a.file("dns-redirect-active")) {
+			if f.jumps["iptables"] || f.jumps["ip6tables"] || len(f.rules) != 0 || len(f.routes) != 0 || len(f.policy) != 0 || exists(a.file("dns-redirect-active")) {
 				t.Fatalf("capture survived %s: %+v", why, f)
 			}
 		})
@@ -201,16 +247,9 @@ func TestDNSBridgeRollbackAndRetry(t *testing.T) {
 	}
 }
 
-func TestDNSBridgeAllowsMissingIPv6NAT(t *testing.T) {
+func TestDNSBridgeCapturesIPv6WithoutNAT(t *testing.T) {
 	a, f := dnsTestApp(t)
-	failIPv6 := true
-	original := a.android
-	a.android = func(tool string, args ...string) ([]byte, error) {
-		if tool == "ip6tables" && failIPv6 && len(args) >= 4 && args[3] == "nat" {
-			return []byte("ip6tables v1.8.11 (legacy): can't initialize ip6tables table `nat': Table does not exist (do you need to insmod?) Perhaps ip6tables or your kernel needs to be upgraded."), errors.New("exit status 3")
-		}
-		return original(tool, args...)
-	}
+	f.noIPv6NAT = true
 	// Recover an incomplete journal when IPv6 NAT has become unavailable.
 	if err := a.saveDNSJournal(dnsBridge{Families: []string{"ipv4", "ipv6"}}); err != nil {
 		t.Fatal(err)
@@ -218,12 +257,12 @@ func TestDNSBridgeAllowsMissingIPv6NAT(t *testing.T) {
 	if err := a.reconcileDNSLocked(runningDNSStatus(), prefs{CorpDNS: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !f.jumps["iptables"] || f.jumps["ip6tables"] {
-		t.Fatalf("IPv4 bridge was not retained: %+v", f)
+	if !f.jumps["iptables"] || !f.jumps["ip6tables"] || f.routes["-6"] == "" || f.policy["-6"] == "" {
+		t.Fatalf("dual-stack capture was not installed: %+v", f)
 	}
 	journal := a.dnsJournal()
-	if !slices.Equal(journal.Families, []string{"ipv4"}) || !slices.Equal(journal.Skipped, []string{"ipv6"}) {
-		t.Fatalf("missing capability was not journaled: %+v", journal)
+	if !slices.Equal(journal.Families, []string{"ipv4", "ipv6"}) || len(journal.Skipped) != 0 || journal.Mode != "routed" {
+		t.Fatalf("incorrect capture coverage: %+v", journal)
 	}
 	if err := a.clearDNSRedirect(); err != nil {
 		t.Fatal(err)
@@ -251,8 +290,8 @@ func TestDNSBridgeLegacyCleanup(t *testing.T) {
 	if err := a.write("dns-redirect-active", []byte("1\n")); err != nil {
 		t.Fatal(err)
 	}
-	f.rules["iptables"] = []string{"legacy fixed destination rule"}
-	f.jumps["iptables"] = true
+	f.rules["iptables/nat"] = []string{"legacy fixed destination rule"}
+	f.jumps["iptables/nat"] = true
 	if err := a.clearDNSRedirect(); err != nil || len(f.rules) != 0 || f.jumps["iptables"] {
 		t.Fatalf("legacy rules survived cleanup: %v", err)
 	}

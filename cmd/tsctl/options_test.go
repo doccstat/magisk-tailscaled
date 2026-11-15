@@ -146,6 +146,9 @@ func TestHotspotRulesJournalAndCleanup(t *testing.T) {
 	var calls []string
 	active := false
 	a.android = func(tool string, args ...string) ([]byte, error) {
+		if tool == "ip" {
+			return nil, nil
+		}
 		c := strings.Join(args[4:], " ")
 		calls = append(calls, c)
 		if c == "-N "+hotspotChain {
