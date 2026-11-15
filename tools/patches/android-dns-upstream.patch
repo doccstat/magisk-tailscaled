@@ -1,0 +1,33 @@
+--- a/net/dns/resolver/forwarder.go
++++ b/net/dns/resolver/forwarder.go
+@@ -497,7 +497,13 @@
+ 
+ var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
+ 
++// Android module upstream sockets bypass capture, not the kernel's tailnet routes.
++var moduleDNSListenConfig *net.ListenConfig
++
+ func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
++	if moduleDNSListenConfig != nil {
++		return nettype.MakePacketListenerWithNetIP(moduleDNSListenConfig), nil
++	}
+ 	if f.linkSel == nil || initListenConfig == nil {
+ 		return stdNetPacketListener, nil
+ 	}
+@@ -938,7 +944,15 @@
+ 	ctx, cancel := context.WithTimeout(ctx, tcpQueryTimeout)
+ 	defer cancel()
+ 
+-	conn, err := f.getDialerType()(ctx, tcpFam, ipp.String())
++	dial := f.getDialerType()
++	if moduleDNSListenConfig != nil {
++		if f.dialer.UseNetstackForIP != nil && f.dialer.UseNetstackForIP(ipp.Addr()) {
++			dial = f.dialer.UserDial
++		} else {
++			dial = (&net.Dialer{Control: moduleDNSListenConfig.Control}).DialContext
++		}
++	}
++	conn, err := dial(ctx, tcpFam, ipp.String())
+ 	if err != nil {
+ 		return nil, err
+ 	}

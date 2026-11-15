@@ -143,9 +143,9 @@ def dependency_notices(modules):
 
 def patch_sources(source, work, go, env):
     patches = ROOT / "tools/patches"
-    for name in ("android-quad100.patch", "android-netlink-recovery.patch", "android-dns-capture.patch"):
+    for name in ("android-quad100.patch", "android-netlink-recovery.patch", "android-dns-capture.patch", "android-dns-upstream.patch"):
         subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(patches / name)], cwd=source, check=True)
-    for name, folder in {"android_quad100_test.go": "net/dns", "android_search_domains_test.go": "net/dns/resolver", "android_dns_selection_test.go": "ipn/ipnlocal", "android_netlink_test.go": "net/netmon", "module_dns_capture.go": "wgengine/netstack", "android_dns_capture_test.go": "wgengine/netstack"}.items():
+    for name, folder in {"android_quad100_test.go": "net/dns", "android_search_domains_test.go": "net/dns/resolver", "android_dns_selection_test.go": "ipn/ipnlocal", "android_netlink_test.go": "net/netmon", "module_dns_capture.go": "wgengine/netstack", "android_dns_capture_test.go": "wgengine/netstack", "module_dns_linux.go": "net/dns/resolver", "android_dns_upstream_test.go": "net/dns/resolver"}.items():
         shutil.copyfile(patches / name, source / folder / name)
     wg = json.loads(subprocess.check_output([str(go), "mod", "download", "-json", f"github.com/tailscale/wireguard-go@{WG_VERSION}"], cwd=source, env=env))
     if (wg["Version"], wg["Sum"], wg["GoModSum"]) != (WG_VERSION, WG_SUM, WG_MOD_SUM):

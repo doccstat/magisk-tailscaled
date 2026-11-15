@@ -34,7 +34,7 @@
       <p class="muted">Tailnet DNS follows the admin console's global and split-DNS settings.</p>
     </section>
     <section><h2>DNS capture &amp; daemon options</h2>
-      <label class="toggle"><span>Capture app DNS<small>UDP/TCP 53 to quad-100; root queries and encrypted DNS bypass capture. No leak protection or kill switch.</small></span><input type="checkbox" data-module data-setting="capture-dns" id="capture-dns"></label>
+      <label class="toggle"><span>Capture app DNS<small>Send IPv4/IPv6 system and app DNS through Tailscale. Encrypted DNS bypasses capture.</small></span><input type="checkbox" data-module data-setting="capture-dns" id="capture-dns"></label>
       <label for="hotspot-interface">Hotspot interface (exact name)</label><div class="input-row"><input id="hotspot-interface" maxlength="15" placeholder="e.g. wlan1" autocomplete="off" spellcheck="false"><button id="save-interface">Save</button></div>
       <label class="toggle"><span>Capture hotspot DNS<small>Only on the specified ingress interface. Does not enable tethering or alter routing.</small></span><input type="checkbox" data-module data-setting="hotspot-dns" id="hotspot-dns"></label>
       <label class="toggle"><span>Expand short DNS names<small>Try tailnet search suffixes for captured single-label queries. Stop first; change takes effect on Start.</small></span><input type="checkbox" data-module data-setting="search-domains" id="search-domains"></label>
@@ -44,14 +44,13 @@
       <div class="actions"><button data-command="start">Start service</button><button data-command="restart">Restart</button><button data-command="stop">Stop service</button><button data-command="logout" class="danger">Sign out</button></div>
       <p class="muted">Stopping persists across reboots. After Disconnect, use Connect rather than Start to resume. Signing out expires this device’s session.</p>
     </section>
-    <details><summary>Logs &amp; diagnostics</summary>
-      <p class="muted">Diagnostics redact credentials, names and network addresses. Recent logs are unredacted. Reports stay on this device until you share them.</p>
+    <details><summary>Diagnostics</summary>
+      <p class="muted">Export settings, network state and recent logs with credentials and personal identifiers redacted.</p>
       <label for="diagnostic-name">DNS test hostname (optional)<small>Queries this exact name through Tailscale's resolver; no exit node needed. Leave empty for configuration only.</small></label>
       <div class="input-row"><input id="diagnostic-name" placeholder="service.example.com" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
-      <label for="diagnostic-path">Export file<small>Choose an absolute path. Existing files will not be replaced.</small></label>
+      <label for="diagnostic-path">Export file</label>
       <div class="input-row"><input id="diagnostic-path" value="/sdcard/Download/magisk-tailscaled-diagnostics.json" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
-      <div class="actions"><button data-command="logs">Recent logs</button><button data-command="diagnostics">Diagnostics</button><button data-command="export-diagnostics">Export diagnostics</button></div>
-      <pre id="output">Choose a report.</pre>
+      <div class="actions"><button data-command="export-diagnostics">Export diagnostics</button></div>
     </details>
     <details><summary>Erase saved state</summary><p>Uninstall preserves identity and preferences. Erasing here stops the service and permanently deletes ALL module state, logs and backups. Revoke the device in the tailnet admin console separately.</p><button id="purge" class="danger">Erase saved state…</button></details>
     <footer id="version">Magisk Tailscaled · Independent community module</footer>

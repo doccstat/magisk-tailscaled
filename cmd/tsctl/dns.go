@@ -25,6 +25,7 @@ const dnsRedirectChain = "MAGISK_TS_DNS"
 const hotspotChain = "MAGISK_TS_HOTSPOT"
 const dnsIPv4 = "100.100.100.100"
 const dnsIPv6 = "fd7a:115c:a1e0::53"
+const dnsBypassMark = "0x20000000/0x20000000" // Must match the resolver's moduleDNSBypassMark.
 
 type dnsBridge struct {
 	Mode     string            `json:"mode,omitempty"`
@@ -199,9 +200,8 @@ func dnsRules(family string) [][]string {
 		addr = dnsIPv6
 	}
 	return [][]string{
-		// tailscaled runs as root; its upstream queries must not loop back to
-		// itself, including unmarked sockets used for subnet DNS resolvers.
-		{"-m", "owner", "--uid-owner", "0", "-j", "RETURN"},
+		// Android netd also runs as root; exempt only marked resolver sockets.
+		{"-m", "mark", "--mark", dnsBypassMark, "-j", "RETURN"},
 		{"-d", addr, "-j", "RETURN"},
 		{"-p", "udp", "--dport", "53", "-j", "MARK", "--set-xmark", dnsCaptureMark},
 		{"-p", "tcp", "--dport", "53", "-j", "MARK", "--set-xmark", dnsCaptureMark},
@@ -240,7 +240,7 @@ func (a app) installDNSLocked(families []string) (err error) {
 			rules := dnsRules(family)
 			if chain == hotspotChain {
 				rules = rules[1:]
-			} // owner match is OUTPUT-only.
+			} // Only local upstream sockets receive the bypass mark.
 			for _, rule := range rules {
 				if _, err = a.dnsFirewall(family, append([]string{"-A", chain}, rule...)...); err != nil {
 					return err

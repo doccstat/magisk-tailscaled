@@ -1,5 +1,11 @@
 ## Unreleased
 
+- Capture Android system DNS as well as direct app queries; exempt only marked
+  module upstream sockets instead of all root traffic.
+- Detach the service from the manager's freezer cgroup before launching the daemon.
+  Include process/freezer state in diagnostics and report frozen service status.
+- Use one diagnostics export action with replacement confirmation for existing
+  files; CLI replacement uses `--overwrite`. Replace reports atomically.
 - Fix recursive interception of the daemon's upstream DNS requests.
 - Capture IPv4/IPv6 UDP and TCP DNS through a dedicated local tunnel without
   requiring IPv6 NAT, an exit node or Android Private DNS. Journal and reconcile
@@ -15,7 +21,7 @@
   Uninstall retains identity/preferences; erasure requires exact confirmation.
   Legacy launchers/identity locations require explicit retirement/migration.
 - Make app and interface-scoped hotspot UDP/TCP DNS capture separate opt-ins,
-  with root bypass, owned-chain journaling/cleanup and native DNS policy.
+  with upstream-socket bypass, owned-chain journaling/cleanup and native DNS policy.
   Search-suffix expansion and userspace fallback are also opt-in.
 - Build patched Tailscale Android CLI 1.98.8 and the controller from pinned source,
   Go 1.26.10 and NDK r27c (ARM32). Rebase DNS and netlink recovery patches and run

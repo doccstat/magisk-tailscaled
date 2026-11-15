@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { exec, quote, commandFor, loginURL } from '../webroot/bridge.js';
+import { exec, quote, commandFor, loginURL, helper } from '../webroot/bridge.js';
 
 test('shell quoting preserves hostile input as one literal argument', () => {
   const value = "name'; $(printf INJECTED) `printf INJECTED`\n--reset";
@@ -15,9 +15,12 @@ test('shell quoting preserves hostile input as one literal argument', () => {
   assert.throws(() => commandFor(['initialize', 'guess']));
   assert.match(commandFor(['initialize', 'preserve']), /'initialize' 'preserve'$/);
   assert.match(commandFor(['purge', 'erase-identity']), /'purge' 'erase-identity'$/);
-  assert.match(commandFor(['diagnostics', 'Service.Example.']), /'diagnostics' 'Service.Example\.'$/);
+  assert.throws(() => commandFor(['diagnostics']));
+  assert.throws(() => commandFor(['logs']));
   const path = "/sdcard/Download/诊断'; $(id).json";
-  assert.equal(commandFor(['export-diagnostics', path, 'Service.Example.']), `${commandFor(['diagnostics']).replace("'diagnostics'", "'export-diagnostics'")} ${quote(path)} 'Service.Example.'`);
+  assert.equal(commandFor(['export-diagnostics', path, 'Service.Example.']), `${quote(helper)} 'export-diagnostics' ${quote(path)} 'Service.Example.'`);
+  assert.equal(commandFor(['export-diagnostics', '--overwrite', path, 'Service.Example.']), `${quote(helper)} 'export-diagnostics' '--overwrite' ${quote(path)} 'Service.Example.'`);
+  assert.throws(() => commandFor(['export-diagnostics', '--overwrite']));
   assert.throws(() => commandFor(['export-diagnostics']));
   assert.throws(() => commandFor(['export-diagnostics', path, '', 'extra']));
   assert.throws(() => commandFor(['diagnostics', 'name', 'extra']));

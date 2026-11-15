@@ -36,6 +36,7 @@ type app struct {
 	android    func(string, ...string) ([]byte, error)
 	dnsBackend func() (tailStatus, prefs, error)
 	tunPresent func() bool
+	cgroupRoot string // Test-only filesystem root for freezer diagnostics.
 }
 type processRecord struct {
 	PID        int
@@ -66,7 +67,7 @@ func main() {
 		fatal(err)
 	}
 	if len(os.Args) < 2 {
-		fatal(errors.New("usage: tsctl status|initialize conservative|initialize preserve|start|stop|restart|connect|disconnect|logout|set <name> <value>|logs|diagnostics [dns-name]|export-diagnostics <absolute-path> [dns-name]|purge erase-identity"))
+		fatal(errors.New("usage: tsctl status|initialize conservative|initialize preserve|start|stop|restart|connect|disconnect|logout|set <name> <value>|logs|diagnostics [dns-name]|export-diagnostics [--overwrite] <absolute-path> [dns-name]|purge erase-identity"))
 	}
 	if os.Args[1] == "supervise-loop" {
 		if err = a.superviseLoop(); err != nil {
@@ -270,6 +271,11 @@ func (a app) start() error {
 // unexpected daemon/engine exit. The latter is retried with bounded backoff;
 // The lifetime lock and process record remain owned throughout backoff.
 func (a app) superviseLoop() error {
+	if runtime.GOOS == "android" {
+		if err := leaveServiceCgroup("/", os.Getpid()); err != nil {
+			return fmt.Errorf("detach service from app freezer: %w", err)
+		}
+	}
 	lifetime, err := lock(a.file("supervisor.lock"))
 	if err != nil {
 		return err
@@ -587,6 +593,15 @@ func (a app) status() map[string]any {
 			s["recovery"] = string(b)
 		}
 	}
+	processes := a.serviceProcesses()
+	s["processes"] = processes
+	for _, p := range processes {
+		if p.Frozen {
+			s["frozen"] = true
+			s["error"] = "Service is frozen in an app cgroup; open the module manager and restart the service."
+			return s
+		}
+	}
 	if !a.running() {
 		return s
 	}
@@ -650,19 +665,24 @@ func (a app) dispatch(args []string) (any, error) {
 			return nil, err
 		}
 	} else if name == "diagnostics" || name == "export-diagnostics" {
-		minArgs := 1
-		if name == "export-diagnostics" {
-			minArgs = 2
+		values := args[1:]
+		overwrite := name == "export-diagnostics" && len(values) > 0 && values[0] == "--overwrite"
+		if overwrite {
+			values = values[1:]
 		}
-		if len(args) < minArgs || len(args) > minArgs+1 {
-			return nil, errors.New("usage: tsctl diagnostics [dns-name] | export-diagnostics <absolute-path> [dns-name]")
+		minArgs := 0
+		if name == "export-diagnostics" {
+			minArgs = 1
+		}
+		if len(values) < minArgs || len(values) > minArgs+1 {
+			return nil, errors.New("usage: tsctl diagnostics [dns-name] | export-diagnostics [--overwrite] <absolute-path> [dns-name]")
 		}
 		query := ""
-		if len(args) == minArgs+1 {
-			query = args[minArgs]
+		if len(values) == minArgs+1 {
+			query = values[minArgs]
 		}
 		if name == "export-diagnostics" {
-			return a.exportDiagnostics(args[1], query)
+			return a.exportDiagnostics(values[0], query, overwrite)
 		}
 		return a.diagnostics(query)
 	} else if name == "initialize" {
