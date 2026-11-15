@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Fix recursive interception of the daemon's upstream DNS requests.
+- Capture IPv4/IPv6 UDP and TCP DNS through a dedicated local tunnel without
+  requiring IPv6 NAT, an exit node or Android Private DNS. Journal and reconcile
+  owned policy routes/mangle rules; remove legacy capture rules on upgrade.
 - Add local JSON diagnostic export with an explicit output path, redaction,
   bounded logs, DNS configuration, Android resolver state and capture counters.
   An optional hostname test checks A/AAAA through Tailscale without an exit node.

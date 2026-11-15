@@ -22,7 +22,7 @@ func diagnosticTestApp(t *testing.T) app {
 	}
 	_ = a.write("ready", nil)
 	_ = a.write("module-options.json", []byte(`{"captureDNS":true}`))
-	_ = a.saveDNSJournal(dnsBridge{Active: true, Families: []string{"ipv4"}, Skipped: []string{"ipv6"}})
+	_ = a.saveDNSJournal(dnsBridge{Mode: "routed", Active: true, Families: []string{"ipv4", "ipv6"}})
 	a.tunPresent = func() bool { return true }
 	a.dnsBackend = func() (tailStatus, prefs, error) {
 		return runningDNSStatus(), prefs{CorpDNS: true, RouteAll: true, Hostname: "my-phone"}, nil
@@ -34,13 +34,19 @@ func diagnosticTestApp(t *testing.T) app {
 			if !strings.Contains(s, " show") && !strings.Contains(s, "route get") {
 				t.Fatalf("mutating network probe: %s", s)
 			}
+			if strings.Contains(s, "route get") {
+				return []byte(args[len(args)-1] + " dev tailscale0 src 100.64.0.1"), nil
+			}
 			return []byte("100.64.0.53 dev tailscale0 src 100.64.0.1"), nil
 		case "iptables":
 			if !strings.Contains(s, " -L ") && !strings.Contains(s, " -S ") {
 				t.Fatalf("mutating firewall probe: %s", s)
 			}
-			return []byte("12 480 DNAT udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:53 to:100.100.100.100:53"), nil
+			return []byte("12 480 MARK udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:53 MARK or 0x40000000"), nil
 		case "ip6tables":
+			if strings.Contains(s, "-t mangle") {
+				return []byte("14 980 MARK udp -- ::/0 ::/0 udp dpt:53 MARK or 0x40000000"), nil
+			}
 			return []byte("can't initialize ip6tables table `nat': Table does not exist"), errors.New("exit status 3")
 		case "settings":
 			if s == "get global private_dns_mode" {
@@ -108,8 +114,11 @@ func TestDiagnosticsWithoutExitNode(t *testing.T) {
 		t.Fatalf("hostname was changed or command incorrect: %s", args)
 	}
 	network := report["network"].(map[string]any)
-	if network[dnsRedirectChain+"6"].(map[string]any)["error"] == nil || !strings.Contains(network[dnsRedirectChain+"4"].(map[string]any)["output"].(string), "12 480 DNAT") {
-		t.Fatal("missing IPv6 failure or capture counters")
+	if network[dnsRedirectChain+"6"].(map[string]any)["error"] == nil || !strings.Contains(network["mangle"+dnsRedirectChain+"4"].(map[string]any)["output"].(string), "12 480 MARK") || !strings.Contains(network["mangle"+dnsRedirectChain+"6"].(map[string]any)["output"].(string), "14 980 MARK") {
+		t.Fatal("missing legacy NAT failure or dual-stack capture counters")
+	}
+	if network["captureInterface"] == nil || network["captureRoutes6"] == nil {
+		t.Fatal("missing capture tunnel or policy routes")
 	}
 	encoded, _ := json.Marshal(report)
 	for _, private := range []string{"my-phone", "100.64.0.53", "100.64.0.1", "192.0.2.53", "private.example", "LEAKME123", "alice@example.com", "must-not-export"} {

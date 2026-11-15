@@ -143,9 +143,9 @@ def dependency_notices(modules):
 
 def patch_sources(source, work, go, env):
     patches = ROOT / "tools/patches"
-    for name in ("android-quad100.patch", "android-netlink-recovery.patch"):
+    for name in ("android-quad100.patch", "android-netlink-recovery.patch", "android-dns-capture.patch"):
         subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(patches / name)], cwd=source, check=True)
-    for name, folder in {"android_quad100_test.go": "net/dns", "android_search_domains_test.go": "net/dns/resolver", "android_dns_selection_test.go": "ipn/ipnlocal", "android_netlink_test.go": "net/netmon"}.items():
+    for name, folder in {"android_quad100_test.go": "net/dns", "android_search_domains_test.go": "net/dns/resolver", "android_dns_selection_test.go": "ipn/ipnlocal", "android_netlink_test.go": "net/netmon", "module_dns_capture.go": "wgengine/netstack", "android_dns_capture_test.go": "wgengine/netstack"}.items():
         shutil.copyfile(patches / name, source / folder / name)
     wg = json.loads(subprocess.check_output([str(go), "mod", "download", "-json", f"github.com/tailscale/wireguard-go@{WG_VERSION}"], cwd=source, env=env))
     if (wg["Version"], wg["Sum"], wg["GoModSum"]) != (WG_VERSION, WG_SUM, WG_MOD_SUM):
@@ -216,7 +216,7 @@ def main():
         patches = patch_sources(source, work, go, env)
         hostenv = {**env, "CGO_ENABLED": "0"}
         hostenv.pop("GOOS", None); hostenv.pop("GOARCH", None)
-        subprocess.run([str(go), "test", "-mod=readonly", "-p=2", "-count=1", "./net/dns", "./net/dns/resolver", "./net/netmon", "./ipn/ipnlocal", "github.com/tailscale/wireguard-go/tun", "-run", "^(TestAndroid.*|TestDNSConfigForNetmap)$"], cwd=source, env=hostenv, check=True)
+        subprocess.run([str(go), "test", "-mod=readonly", "-p=2", "-count=1", "./net/dns", "./net/dns/resolver", "./net/netmon", "./ipn/ipnlocal", "./wgengine/netstack", "github.com/tailscale/wireguard-go/tun", "-run", "^(TestAndroid.*|TestDNSConfigForNetmap)$"], cwd=source, env=hostenv, check=True)
         tags = subprocess.check_output([str(go), "run", "-mod=readonly", "./cmd/featuretags", "--remove", OMIT, "--add", "cli"], cwd=source, env=hostenv, text=True).strip()
         if not re.fullmatch(r"[a-zA-Z0-9_,]+", tags):
             raise ValueError("Invalid build tags")

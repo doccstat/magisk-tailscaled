@@ -147,19 +147,29 @@ func (a app) diagnostics(name string) (map[string]any, error) {
 		}
 		dns["query"] = map[string]any{"name": name, "source": "Tailscale internal forwarder (not Android app capture)", "results": queries}
 	}
-	network := map[string]diagnosticResult{"addresses": probe("ip", "addr", "show", "tailscale0")}
+	network := map[string]diagnosticResult{
+		"addresses":        probe("ip", "addr", "show", "tailscale0"),
+		"captureInterface": probe("ip", "link", "show", "dev", dnsCaptureInterface),
+	}
 	for _, family := range []string{"4", "6"} {
 		network["rules"+family] = probe("ip", "-"+family, "rule", "show")
 		network["routes"+family] = probe("ip", "-"+family, "route", "show", "table", "52")
+		network["captureRoutes"+family] = probe("ip", "-"+family, "route", "show", "table", dnsCaptureTable)
 		tool, target := "iptables", dnsIPv4
 		if family == "6" {
 			tool, target = "ip6tables", dnsIPv6
 		}
 		network["quad100Route"+family] = probe("ip", "-"+family, "route", "get", target)
-		for _, chain := range []string{dnsRedirectChain, hotspotChain} {
-			network[chain+family] = probe(tool, "-w", "1", "-t", "nat", "-n", "-v", "-x", "-L", chain)
+		for _, table := range []string{"mangle", "nat"} {
+			prefix, hooks := "mangle", "mangleOutputHooks"
+			if table == "nat" {
+				prefix, hooks = "", "dnsOutputHooks"
+			} // Preserve schema-1 NAT fields.
+			for _, chain := range []string{dnsRedirectChain, hotspotChain} {
+				network[prefix+chain+family] = probe(tool, "-w", "1", "-t", table, "-n", "-v", "-x", "-L", chain)
+			}
+			network[hooks+family] = probe(tool, "-w", "1", "-t", table, "-S", "OUTPUT")
 		}
-		network["dnsOutputHooks"+family] = probe(tool, "-w", "1", "-t", "nat", "-S", "OUTPUT")
 	}
 	report := map[string]any{
 		"schema": 1, "createdAt": time.Now().UTC().Format(time.RFC3339), "redacted": true,

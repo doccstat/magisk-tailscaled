@@ -19,14 +19,15 @@ import (
 )
 
 // Tailscale owns DNS policy: global/split resolvers, MagicDNS and exit-node
-// overrides. This bridge only steers ordinary app port-53 traffic to its local
-// service addresses. These chain names belong only to this controller.
+// overrides. This bridge routes ordinary port-53 traffic to the daemon's
+// separate DNS TUN. These chain names belong only to this controller.
 const dnsRedirectChain = "MAGISK_TS_DNS"
 const hotspotChain = "MAGISK_TS_HOTSPOT"
 const dnsIPv4 = "100.100.100.100"
 const dnsIPv6 = "fd7a:115c:a1e0::53"
 
 type dnsBridge struct {
+	Mode     string            `json:"mode,omitempty"`
 	Active   bool              `json:"active"`
 	Families []string          `json:"families"`
 	Skipped  []string          `json:"skipped,omitempty"`
@@ -34,9 +35,7 @@ type dnsBridge struct {
 	Scope    moduleOptions     `json:"scope"`
 }
 
-// A number of Android kernels ship iptables with IPv4 nat but omit the IPv6
-// nat table entirely. That is a capability limitation, not a bridge failure:
-// keep IPv4 DNS working and leave IPv6 DNS to the device's normal resolver.
+// Old controller versions used NAT. Missing IPv6 NAT must not block cleanup.
 func missingNATTable(err error) bool {
 	if err == nil {
 		return false
@@ -45,20 +44,6 @@ func missingNATTable(err error) bool {
 	// Legacy iptables opens with a backtick and closes with an apostrophe.
 	// Match the table name and diagnostic without depending on quote style.
 	return strings.Contains(s, "table `nat") && strings.Contains(s, "does not exist")
-}
-
-func (a app) availableDNSFamilies(families []string) (available, skipped []string, err error) {
-	for _, family := range families {
-		if _, e := a.dnsFirewall(family, "-S"); e != nil {
-			if family == "ipv6" && missingNATTable(e) {
-				skipped = append(skipped, family)
-				continue
-			}
-			return nil, nil, e
-		}
-		available = append(available, family)
-	}
-	return available, skipped, nil
 }
 
 func (a app) dnsJournal() dnsBridge {
@@ -88,23 +73,30 @@ func (a app) dnsError(message string) {
 }
 
 func (a app) dnsFirewall(family string, args ...string) (string, error) {
+	return a.dnsFirewallTable(family, "mangle", args...)
+}
+
+func (a app) dnsFirewallTable(family, table string, args ...string) (string, error) {
 	tool := "iptables"
 	if family == "ipv6" {
 		tool = "ip6tables"
 	}
-	argv := append([]string{"-w", "1", "-t", "nat"}, args...)
+	return a.dnsCommand(tool, append([]string{"-w", "1", "-t", table}, args...)...)
+}
+
+func (a app) dnsCommand(tool string, args ...string) (string, error) {
 	var b []byte
 	var err error
 	if a.android != nil {
-		b, err = a.android(tool, argv...)
+		b, err = a.android(tool, args...)
 	} else {
 		// Even accidentally running a unit test must never touch host rules.
 		if runtime.GOOS != "android" {
-			return "", errors.New("DNS firewall requires Android")
+			return "", errors.New("DNS network commands require Android")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		b, err = exec.CommandContext(ctx, "/system/bin/"+tool, argv...).CombinedOutput()
+		b, err = exec.CommandContext(ctx, "/system/bin/"+tool, args...).CombinedOutput()
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w: %s", tool, strings.Join(args, " "), err, strings.TrimSpace(string(b)))
@@ -132,43 +124,12 @@ func (a app) clearDNSLocked(force bool) error {
 	if !force && !recorded {
 		return nil
 	}
-	families := []string{"ipv4", "ipv6"}
 	var errs []error
-	for _, family := range families {
-		rules, err := a.dnsFirewall(family, "-S")
-		if err != nil {
-			if family == "ipv6" && missingNATTable(err) {
-				continue
-			}
-			if recorded {
-				errs = append(errs, err)
-			}
-			continue
+	for _, family := range []string{"ipv4", "ipv6"} {
+		for _, table := range []string{"mangle", "nat"} {
+			errs = append(errs, a.clearDNSChains(family, table, recorded))
 		}
-		for _, line := range strings.Split(rules, "\n") {
-			args := strings.Fields(line)
-			owned := line == "-A OUTPUT -j "+dnsRedirectChain
-			owned = owned || (len(args) == 6 && args[0] == "-A" && args[1] == "PREROUTING" && args[2] == "-i" && interfaceRE.MatchString(args[3]) && args[4] == "-j" && args[5] == hotspotChain)
-			if owned {
-				args[0] = "-D"
-				if _, err := a.dnsFirewall(family, args...); err != nil {
-					errs = append(errs, err)
-				}
-			}
-		}
-		for _, chain := range []string{dnsRedirectChain, hotspotChain} {
-			if !slices.Contains(strings.Split(rules, "\n"), "-N "+chain) {
-				continue
-			}
-			// Never flush a built-in or foreign chain.
-			if _, err := a.dnsFirewall(family, "-F", chain); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if _, err := a.dnsFirewall(family, "-X", chain); err != nil {
-				errs = append(errs, err)
-			}
-		}
+		errs = append(errs, a.clearDNSRoutes(family))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
@@ -179,6 +140,46 @@ func (a app) clearDNSLocked(force bool) error {
 		}
 	}
 	return nil
+}
+
+func (a app) clearDNSChains(family, table string, recorded bool) error {
+	var errs []error
+	firewall := func(args ...string) (string, error) { return a.dnsFirewallTable(family, table, args...) }
+	rules, err := firewall("-S")
+	if err != nil {
+		if table == "nat" && family == "ipv6" && missingNATTable(err) {
+			return nil
+		}
+		if recorded {
+			return err
+		}
+		return nil
+	}
+	for _, line := range strings.Split(rules, "\n") {
+		args := strings.Fields(line)
+		owned := line == "-A OUTPUT -j "+dnsRedirectChain
+		owned = owned || (len(args) == 6 && args[0] == "-A" && args[1] == "PREROUTING" && args[2] == "-i" && interfaceRE.MatchString(args[3]) && args[4] == "-j" && args[5] == hotspotChain)
+		if owned {
+			args[0] = "-D"
+			if _, err := firewall(args...); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	for _, chain := range []string{dnsRedirectChain, hotspotChain} {
+		if !slices.Contains(strings.Split(rules, "\n"), "-N "+chain) {
+			continue
+		}
+		// Never flush a built-in or foreign chain.
+		if _, err := firewall("-F", chain); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if _, err := firewall("-X", chain); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func dnsHooks(o moduleOptions) map[string][]string {
@@ -193,25 +194,21 @@ func dnsHooks(o moduleOptions) map[string][]string {
 }
 
 func dnsRules(family string) [][]string {
-	addr, destination := dnsIPv4, dnsIPv4+":53"
+	addr := dnsIPv4
 	if family == "ipv6" {
-		addr, destination = dnsIPv6, "["+dnsIPv6+"]:53"
+		addr = dnsIPv6
 	}
 	return [][]string{
 		// tailscaled runs as root; its upstream queries must not loop back to
 		// itself, including unmarked sockets used for subnet DNS resolvers.
 		{"-m", "owner", "--uid-owner", "0", "-j", "RETURN"},
 		{"-d", addr, "-j", "RETURN"},
-		{"-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", destination},
-		{"-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", destination},
+		{"-p", "udp", "--dport", "53", "-j", "MARK", "--set-xmark", dnsCaptureMark},
+		{"-p", "tcp", "--dport", "53", "-j", "MARK", "--set-xmark", dnsCaptureMark},
 	}
 }
 
-func (a app) installDNSLocked(families []string) error {
-	return a.installDNSLockedWithSkipped(families, nil)
-}
-
-func (a app) installDNSLockedWithSkipped(families, skipped []string) (err error) {
+func (a app) installDNSLocked(families []string) (err error) {
 	if err = a.clearDNSLocked(true); err != nil {
 		return err
 	}
@@ -219,7 +216,10 @@ func (a app) installDNSLockedWithSkipped(families, skipped []string) (err error)
 	if e != nil {
 		return e
 	}
-	s := dnsBridge{Families: families, Skipped: skipped, Rules: make(map[string]string), Scope: opts}
+	if _, err = a.dnsCommand("ip", "link", "show", "dev", dnsCaptureInterface); err != nil {
+		return fmt.Errorf("DNS capture tunnel unavailable: %w", err)
+	}
+	s := dnsBridge{Mode: "routed", Families: families, Rules: make(map[string]string), Scope: opts}
 	// Journal BEFORE any mutation so partial installs and hard kills recover.
 	if err = a.saveDNSJournal(s); err != nil {
 		return err
@@ -230,6 +230,9 @@ func (a app) installDNSLockedWithSkipped(families, skipped []string) (err error)
 		}
 	}()
 	for _, family := range families {
+		if err = a.installDNSRoutes(family); err != nil {
+			return err
+		}
 		for chain := range dnsHooks(opts) {
 			if _, err = a.dnsFirewall(family, "-N", chain); err != nil {
 				return err
@@ -336,18 +339,14 @@ func (a app) reconcileDNSLocked(ts tailStatus, p prefs) error {
 	if len(families) == 0 {
 		return errors.Join(errors.New("waiting for Tailscale addresses"), a.clearDNSLocked(false))
 	}
-	available, skipped, err := a.availableDNSFamilies(families)
-	if err != nil {
-		return errors.Join(err, a.clearDNSLocked(false))
-	}
-	if len(available) == 0 {
-		return errors.Join(errors.New("Android has no usable DNS NAT table"), a.clearDNSLocked(false))
-	}
-	families = available
 	s := a.dnsJournal()
-	intact := s.Active && slices.Equal(s.Families, families) && s.Scope == opts
+	intact := s.Active && s.Mode == "routed" && slices.Equal(s.Families, families) && s.Scope == opts
 	if intact {
 		for _, family := range families {
+			route, rule, err := a.dnsRouteState(family)
+			if err != nil || !route || !rule {
+				intact = false
+			}
 			for chain, hook := range dnsHooks(opts) {
 				rules, err := a.dnsFirewall(family, "-S", chain)
 				_, jumpErr := a.dnsFirewall(family, append([]string{"-C"}, hook...)...)
@@ -360,7 +359,7 @@ func (a app) reconcileDNSLocked(ts tailStatus, p prefs) error {
 	if intact {
 		return nil
 	}
-	return a.installDNSLockedWithSkipped(families, skipped)
+	return a.installDNSLocked(families)
 }
 
 func (a app) setDNSRedirect(value string) error {

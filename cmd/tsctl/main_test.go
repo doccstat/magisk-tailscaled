@@ -24,6 +24,7 @@ func TestMain(m *testing.M) {
 		switch filepath.Base(exe) {
 		case "tsctl":
 			a := app{module: filepath.Dir(filepath.Dir(exe)), base: base, self: exe,
+				android:     func(string, ...string) ([]byte, error) { return nil, nil },
 				checkSystem: func() error { return nil }, setupTUN: func() error { return nil }}
 			if len(os.Args) != 2 || (os.Args[1] != "supervise" && os.Args[1] != "supervise-loop") {
 				os.Exit(2)
@@ -126,6 +127,7 @@ func testApp(t *testing.T) app {
 		t.Fatal(err)
 	}
 	return app{module: filepath.Dir(bin), base: base, self: filepath.Join(bin, "tsctl"),
+		android:     func(string, ...string) ([]byte, error) { return nil, nil },
 		checkSystem: func() error { return nil }, setupTUN: func() error { return nil }}
 }
 
@@ -243,7 +245,8 @@ func TestProcessIdentityAndLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := app{base: t.TempDir(), module: "/not-this-module", self: "/not-this-module/bin/tsctl"}
+	a := app{base: t.TempDir(), module: "/not-this-module", self: "/not-this-module/bin/tsctl",
+		android: func(string, ...string) ([]byte, error) { return nil, nil }}
 	b, _ := json.Marshal(other)
 	_ = a.write("supervisor.json", b)
 	if err := a.stop(false); err != nil {
@@ -302,7 +305,7 @@ func TestDNSRedirectUsesPrivateOwnedChain(t *testing.T) {
 	for _, call := range calls {
 		joined += strings.Join(call, " ") + "\n"
 	}
-	if !strings.Contains(joined, "-N MAGISK_TS_DNS") || !strings.Contains(joined, "-j DNAT --to-destination 100.100.100.100:53") {
+	if !strings.Contains(joined, "-N MAGISK_TS_DNS") || !strings.Contains(joined, "-j MARK --set-xmark "+dnsCaptureMark) {
 		t.Fatalf("unexpected firewall commands:\n%s", joined)
 	}
 	if err := a.clearDNSRedirect(); err != nil {

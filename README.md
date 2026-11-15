@@ -81,7 +81,7 @@ Every additional module networking option defaults **off**:
 
 | Option (`tsctl set NAME VALUE`) | Effect |
 | --- | --- |
-| `capture-dns true` | Capture non-root OUTPUT UDP/TCP port 53 to quad-100. |
+| `capture-dns true` | Capture non-root OUTPUT UDP/TCP port 53 to the local DNS tunnel, over IPv4 and IPv6. |
 | `hotspot-interface wlan1` | Select an exact interface, without wildcards or guessing. |
 | `hotspot-dns true` | Capture PREROUTING UDP/TCP 53 only on that interface; does not enable tethering or alter its routes. |
 | `search-domains true` | Try tailnet suffixes for single-label queries; Stop before changing. |
@@ -92,15 +92,17 @@ userspace fallback never activates capture.
 Global/split DNS, MagicDNS and exit-node resolver selection remain Tailscale's
 policy. General DNS capture requires a reachable global resolver/override or
 exit-node DNS; do not enable blanket capture with only a split private resolver.
-Root queries bypass capture to prevent forwarding loops. Private DNS/DoT, DoH,
-other encrypted traffic and unavailable IPv6 NAT are not captured: this is **not**
+Root queries bypass capture to prevent forwarding loops. IPv6 NAT is not required.
+Private DNS/DoT, DoH and other encrypted traffic are not captured: this is **not**
 a DNS leak barrier or kill switch. Browser address-bar search is not controlled
 by DNS search expansion; use a URL scheme and test the full hostname first.
 
-The controller journals its two owned chains (`MAGISK_TS_DNS` and
-`MAGISK_TS_HOTSPOT`), repairs drift and removes only those chains and their
-jumps. It never flushes Android's shared chains. Device testing of rule order,
-Android resolver behavior and VPN interaction is still required.
+The daemon serves captured DNS on a separate `tsdns0` tunnel, keeping its own
+upstream queries out of capture. The controller journals its two owned mangle
+chains (`MAGISK_TS_DNS` and `MAGISK_TS_HOTSPOT`), mark bit `0x40000000`, routing
+table `5300` and policy-rule priority `12400`. It repairs drift, removes its old
+NAT rules on upgrade, and refuses conflicting routes/rules rather than replacing
+them. Disabling capture or stopping removes these routes and hooks.
 
 ## Identity, migration and removal
 
@@ -201,8 +203,8 @@ Use your file manager to share it; choose another filename if it already exists.
 The exporter uses exactly the path entered and never replaces an existing file.
 
 Reports include versions/build metadata, saved preferences, DNS policy, Android
-Private DNS/resolver state, owned firewall counters, routes, errors and bounded
-recent logs. Credentials are removed and names/addresses are consistently
+Private DNS/resolver state, DNS tunnel, owned mangle/legacy NAT counters, routes,
+errors and bounded recent logs. Credentials are removed and names/addresses are consistently
 pseudonymized within each report. **Recent logs** displays the original log.
 The optional hostname test queries Tailscale's internal resolver for A/AAAA
 records; it helps distinguish resolver failures from Android app capture failures.
