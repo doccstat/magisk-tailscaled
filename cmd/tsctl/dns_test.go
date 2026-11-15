@@ -144,7 +144,7 @@ func TestDNSBridgeReconcileAndRepair(t *testing.T) {
 	}
 	for _, tool := range []string{"iptables", "ip6tables"} {
 		rules := f.rules[tool]
-		if !f.jumps[tool] || len(rules) != 4 || rules[0] != "-m owner --uid-owner 0 -j RETURN" {
+		if !f.jumps[tool] || len(rules) != 4 || rules[0] != "-m mark --mark "+dnsBypassMark+" -j RETURN" {
 			t.Fatalf("missing loop exemption or jump: %s %v", tool, rules)
 		}
 		for i, proto := range []string{"udp", "tcp"} {

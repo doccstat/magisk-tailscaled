@@ -19,13 +19,13 @@ function render(data) {
   current = data;
   const ts = data.tailscale || {};
   const prefs = data.prefs || {};
-  $('state').textContent = data.running ? (ts.BackendState || 'Starting') : (data.recovering ? 'Recovering service' : 'Service stopped');
+  $('state').textContent = data.frozen ? 'Service frozen' : data.running ? (ts.BackendState || 'Starting') : (data.recovering ? 'Recovering service' : 'Service stopped');
   $('addresses').textContent = (ts.TailscaleIPs || []).join(' · ') || 'No tailnet address assigned';
   $('identity').textContent = ts.Self?.DNSName || ts.Self?.HostName || '';
   const dns = data.dns || {};
   const skipped = (dns.skipped || []).join('/');
-  const dnsInfo = dns.active ? ` · Tailnet DNS active (${(dns.families || []).join('/') || 'quad-100'}${skipped ? `; ${skipped} unavailable` : ''})` : dns.enabled ? ' · Tailnet DNS bridge inactive' : '';
-  $('service-info').textContent = `${data.running ? 'Running' : data.recovering ? 'Recovering' : 'Stopped'} · TUN ${data.tun ? 'present' : 'absent'}${data.paused ? ' · Boot start paused' : ''}${data.disconnected ? ' · Disconnected until Connect' : ''}${dnsInfo}`;
+  const dnsInfo = dns.active ? ` · DNS capture configured (${(dns.families || []).join('/') || 'quad-100'}${skipped ? `; ${skipped} unavailable` : ''})` : dns.enabled ? ' · Tailnet DNS bridge inactive' : '';
+  $('service-info').textContent = `${data.frozen ? 'Frozen' : data.running ? 'Running' : data.recovering ? 'Recovering' : 'Stopped'} · TUN ${data.tun ? 'present' : 'absent'}${data.paused ? ' · Boot start paused' : ''}${data.disconnected ? ' · Disconnected until Connect' : ''}${dnsInfo}`;
   $('version').textContent = `Module ${data.version || 'unknown'} · Tailscale ${data.coreVersion || 'unknown'}`;
   $('setup').hidden = !!data.initialized;
   const options = data.options || {};
@@ -67,13 +67,16 @@ async function run(args, silent = false) {
   busy = true; controls();
   if (!silent) message('Working…');
   try {
-    const result = await exec(args);
-    if (args[0] === 'logs' || args[0] === 'diagnostics') {
-      $('output').textContent = result.text || JSON.stringify(result, null, 2);
-      message('Report refreshed.');
-    } else if (args[0] === 'export-diagnostics') {
-      $('output').textContent = `Diagnostics saved to ${result.path}`;
-      message($('output').textContent);
+    let result = await exec(args);
+    if (args[0] === 'export-diagnostics') {
+      if (result.needsOverwrite) {
+        if (!confirm(`Replace the existing file at ${result.path}?`)) {
+          message('Export cancelled.');
+          return;
+        }
+        result = await exec([args[0], '--overwrite', ...args.slice(1)]);
+      }
+      message(`Diagnostics saved to ${result.path}`);
     } else {
       if (!silent) message('');
       render(result);
@@ -89,7 +92,7 @@ document.querySelectorAll('[data-command]').forEach(button => button.addEventLis
   if (action === 'logout' && !confirm('Sign out and expire this device’s Tailscale session?')) return;
   const args = [action];
   if (action === 'export-diagnostics') args.push($('diagnostic-path').value);
-  if ((action === 'diagnostics' || action === 'export-diagnostics') && $('diagnostic-name').value !== '') args.push($('diagnostic-name').value);
+  if (action === 'export-diagnostics' && $('diagnostic-name').value !== '') args.push($('diagnostic-name').value);
   run(args);
 }));
 document.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('change', async () => {

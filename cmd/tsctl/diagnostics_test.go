@@ -133,7 +133,7 @@ func TestDiagnosticsWithoutExitNode(t *testing.T) {
 	}
 }
 
-func TestDiagnosticExportIsExplicitAndExclusive(t *testing.T) {
+func TestDiagnosticExportAndConfirmedReplacement(t *testing.T) {
 	a := diagnosticTestApp(t)
 	path := filepath.Join(t.TempDir(), "报告 with spaces.json")
 	result, err := a.dispatch([]string{"export-diagnostics", path})
@@ -153,8 +153,9 @@ func TestDiagnosticExportIsExplicitAndExclusive(t *testing.T) {
 	if report["redacted"] != true || report["dns"].(map[string]any)["query"] != nil || exists(a.file("last-ts-args")) {
 		t.Fatal("unrequested query or unredacted export")
 	}
-	if _, err := a.dispatch([]string{"export-diagnostics", path}); err == nil {
-		t.Fatal("overwrote existing report")
+	result, err = a.dispatch([]string{"export-diagnostics", path})
+	if err != nil || result.(map[string]any)["needsOverwrite"] != true || result.(map[string]any)["path"] != path {
+		t.Fatal("missing overwrite choice", result, err)
 	}
 	after, _ := os.ReadFile(path)
 	if string(after) != string(b) {
@@ -164,10 +165,38 @@ func TestDiagnosticExportIsExplicitAndExclusive(t *testing.T) {
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.exportDiagnostics(link, ""); err == nil {
-		t.Fatal("followed destination symlink")
+	for _, overwrite := range []bool{false, true} {
+		if _, err := a.exportDiagnostics(link, "", overwrite); err == nil {
+			t.Fatal("followed destination symlink")
+		}
 	}
-	for _, args := range [][]string{{"export-diagnostics"}, {"export-diagnostics", "relative.json"}, {"diagnostics", "https://private.example"}, {"diagnostics", " --help"}, {"diagnostics", "name", "extra"}} {
+	if _, err := a.dispatch([]string{"export-diagnostics", "--overwrite", path, "https://invalid"}); err == nil {
+		t.Fatal("invalid query accepted")
+	}
+	after, _ = os.ReadFile(path)
+	if string(after) != string(b) {
+		t.Fatal("failed export damaged old report")
+	}
+	result, err = a.dispatch([]string{"export-diagnostics", "--overwrite", path, "Service.Private.Example."})
+	if err != nil || result.(map[string]string)["path"] != path {
+		t.Fatal(result, err)
+	}
+	after, err = os.ReadFile(path)
+	if err != nil || !json.Valid(after) || string(after) == string(b) {
+		t.Fatal("report not replaced", err)
+	}
+	var replacement map[string]any
+	json.Unmarshal(after, &replacement)
+	if replacement["dns"].(map[string]any)["query"] == nil {
+		t.Fatal("new report missing query")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".tsctl-report-") {
+			t.Fatal("temporary export left behind")
+		}
+	}
+	for _, args := range [][]string{{"export-diagnostics"}, {"export-diagnostics", "--overwrite"}, {"export-diagnostics", "relative.json"}, {"export-diagnostics", "--overwrite", "relative.json"}, {"diagnostics", "https://private.example"}, {"diagnostics", " --help"}, {"diagnostics", "name", "extra"}} {
 		if _, err := a.dispatch(args); err == nil {
 			t.Fatal("accepted invalid arguments", args)
 		}

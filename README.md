@@ -81,7 +81,7 @@ Every additional module networking option defaults **off**:
 
 | Option (`tsctl set NAME VALUE`) | Effect |
 | --- | --- |
-| `capture-dns true` | Capture non-root OUTPUT UDP/TCP port 53 to the local DNS tunnel, over IPv4 and IPv6. |
+| `capture-dns true` | Capture system and app OUTPUT UDP/TCP port 53 to the local DNS tunnel, over IPv4 and IPv6. Only the module's marked upstream queries bypass capture. |
 | `hotspot-interface wlan1` | Select an exact interface, without wildcards or guessing. |
 | `hotspot-dns true` | Capture PREROUTING UDP/TCP 53 only on that interface; does not enable tethering or alter its routes. |
 | `search-domains true` | Try tailnet suffixes for single-label queries; Stop before changing. |
@@ -190,22 +190,24 @@ that workflow or authorize publication.
 ## Safety and support
 
 PID, process start time and executable must match before lifecycle signals.
-Controls are serialized. Unexpected exits get seven retries with bounded backoff;
-five healthy minutes reset the budget. Logs rotate at 512 KiB with one previous
-file. Review diagnostics before sharing: names, addresses and login URLs can be
+Controls are serialized. The service leaves the manager's app freezer group before
+starting the daemon, so backgrounding the manager does not suspend it. Unexpected
+exits get seven retries with bounded backoff; five healthy minutes reset the
+budget. Logs rotate at 512 KiB with one previous file. Review diagnostics before sharing: names, addresses and login URLs can be
 sensitive. On a failed stop or broken routing, disable the module and reboot;
 do not kill every Tailscale process or flush shared firewall tables.
 
-To share a diagnostic report, open **Logs & diagnostics**, optionally enter the
-failing DNS hostname, choose **Export file**, and tap **Export diagnostics**.
-The visible default is `/sdcard/Download/magisk-tailscaled-diagnostics.json`.
-Use your file manager to share it; choose another filename if it already exists.
-The exporter uses exactly the path entered and never replaces an existing file.
+To share a diagnostic report, open **Diagnostics**, optionally enter the failing
+DNS hostname, choose **Export file**, and tap **Export diagnostics**.
+The default is `/sdcard/Download/magisk-tailscaled-diagnostics.json`.
+Confirm **Replace** to update an existing report, or cancel and choose another
+path. The exporter uses exactly the path entered. Share it from your file manager.
 
 Reports include versions/build metadata, saved preferences, DNS policy, Android
 Private DNS/resolver state, DNS tunnel, owned mangle/legacy NAT counters, routes,
-errors and bounded recent logs. Credentials are removed and names/addresses are consistently
-pseudonymized within each report. **Recent logs** displays the original log.
+errors, process/freezer state and bounded recent logs. Credentials are removed and
+names/addresses are consistently pseudonymized within each report. The dashboard's
+“DNS capture configured” indicates installed capture rules, not a successful lookup.
 The optional hostname test queries Tailscale's internal resolver for A/AAAA
 records; it helps distinguish resolver failures from Android app capture failures.
 Leaving it empty collects configuration without issuing DNS queries.
@@ -215,7 +217,12 @@ CLI equivalents, in a root shell (the hostname is optional):
 ```sh
 "$CTL" diagnostics service.example.com
 "$CTL" export-diagnostics /sdcard/Download/tailscale-report.json service.example.com
+# Replace the report at the same path:
+"$CTL" export-diagnostics --overwrite /sdcard/Download/tailscale-report.json service.example.com
 ```
+
+Without `--overwrite`, an existing file returns `needsOverwrite: true` and its
+path. Confirmed replacement writes a complete report before replacing the old one.
 
 Report issues to the [fork](https://github.com/doccstat/magisk-tailscaled/issues)
 with manager/Android versions and the exported report. Host tests do not establish

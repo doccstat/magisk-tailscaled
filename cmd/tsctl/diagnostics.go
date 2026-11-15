@@ -198,9 +198,22 @@ func (a app) diagnostics(name string) (map[string]any, error) {
 	return r.scrub(report).(map[string]any), nil
 }
 
-func (a app) exportDiagnostics(path, name string) (any, error) {
+func (a app) exportDiagnostics(path, name string, overwrite bool) (any, error) {
 	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
 		return nil, errors.New("choose an absolute output file path")
+	}
+	if err := validateDiagnosticName(name); err != nil {
+		return nil, err
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("choose a regular output file, not a directory or symbolic link")
+		}
+		if !overwrite {
+			return map[string]any{"path": path, "needsOverwrite": true}, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 	report, err := a.diagnostics(name)
 	if err != nil {
@@ -210,14 +223,33 @@ func (a app) exportDiagnostics(path, name string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// O_EXCL also refuses a destination symlink; never overwrite a user file.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	var f *os.File
+	if overwrite {
+		// Replace only after the complete report is written, without following links.
+		f, err = os.CreateTemp(filepath.Dir(path), ".tsctl-report-*")
+	} else {
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			return map[string]any{"path": path, "needsOverwrite": true}, nil
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot export to %s (existing files are not replaced): %w", path, err)
+		return nil, fmt.Errorf("cannot export to %s: %w", path, err)
+	}
+	if overwrite {
+		defer os.Remove(f.Name())
 	}
 	_, writeErr := f.Write(append(b, '\n'))
 	if err := errors.Join(writeErr, f.Close()); err != nil {
-		return nil, fmt.Errorf("incomplete export at %s: %w", path, err)
+		if !overwrite {
+			_ = os.Remove(path)
+		}
+		return nil, fmt.Errorf("cannot export to %s: %w", path, err)
+	}
+	if overwrite {
+		if err := os.Rename(f.Name(), path); err != nil {
+			return nil, fmt.Errorf("cannot replace %s: %w", path, err)
+		}
 	}
 	return map[string]string{"path": path}, nil
 }

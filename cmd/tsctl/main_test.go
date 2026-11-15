@@ -18,6 +18,13 @@ import (
 
 // Real subprocess integration, with fake Tailscale binaries and no host routing.
 func TestMain(m *testing.M) {
+	if os.Getenv("TSM_TEST_FREEZER_CHILD") == "1" {
+		if err := freezerTestChild(); err != nil {
+			os.Stderr.WriteString(err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	base := os.Getenv("TSM_TEST_BASE")
 	if base != "" {
 		exe, _ := os.Executable()

@@ -32,7 +32,7 @@ test('dashboard uses native DNS preference and preserves exit-node selection', (
   context.render(status);
   assert.equal(element('accept-dns').checked, true);
   assert.equal(element('exit-node').value, '100.64.0.2');
-  assert.match(element('service-info').textContent, /Tailnet DNS active \(ipv4\/ipv6\)/);
+  assert.match(element('service-info').textContent, /DNS capture configured \(ipv4\/ipv6\)/);
   status.dns.active = false;
   status.dns.error = 'test bridge error';
   context.render(status);
@@ -49,7 +49,7 @@ test('dashboard uses native DNS preference and preserves exit-node selection', (
   context.render(status);
   assert.equal(element('capture-dns').checked, true);
   assert.equal(element('exit-node').value, '');
-  assert.match(element('service-info').textContent, /Tailnet DNS active/);
+  assert.match(element('service-info').textContent, /DNS capture configured/);
 });
 
 test('setup, names and identity erasure require exact user choices', async () => {
@@ -98,19 +98,24 @@ test('diagnostics export preserves chosen filename and query and survives refres
     });
     return elements.get(id);
   };
-  const buttons = ['diagnostics', 'export-diagnostics'].map(id => {
+  const html = readFileSync(new URL('../webroot/index.html', import.meta.url), 'utf8');
+  const section = html.split('<summary>Diagnostics</summary>')[1].split('</details>')[0];
+  assert.deepEqual([...section.matchAll(/data-command="([^"]+)"/g)].map(match => match[1]), ['export-diagnostics']);
+  assert.doesNotMatch(section, /Recent logs|not be replaced|id="output"/);
+  const buttons = ['export-diagnostics'].map(id => {
     const button = element(id); button.dataset.command = id; return button;
   });
+  let overwrite = false, existing = false;
+  const prompts = [];
   const context = vm.createContext({
     document: { getElementById: element, querySelectorAll: selector => selector === '[data-command]' ? buttons : [], addEventListener() {} },
     Option: function(text, value) { this.text = text; this.value = value; },
     exec: async args => {
       calls.push(Array.from(args));
-      if (args[0] === 'export-diagnostics') return { path: args[1] };
-      if (args[0] === 'diagnostics') return { redacted: true };
+      if (args[0] === 'export-diagnostics') return args[1] === '--overwrite' ? { path: args[2] } : { path: args[1], needsOverwrite: existing };
       return { running: true, prefs: { CorpDNS: true }, options: { captureDNS: true } };
     },
-    loginURL: () => null, setInterval() {},
+    loginURL: () => null, setInterval() {}, confirm: text => { prompts.push(text); return overwrite; },
   });
   vm.runInContext(readFileSync(new URL('../webroot/app.js', import.meta.url), 'utf8').replace(/^import .*;\n/, ''), context);
   const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -122,12 +127,21 @@ test('diagnostics export preserves chosen filename and query and survives refres
   assert.equal(element('feedback').textContent, 'Diagnostics saved to /sdcard/Download/诊断 report.json');
   await context.run(['status'], true);
   assert.equal(element('feedback').textContent, 'Diagnostics saved to /sdcard/Download/诊断 report.json');
-  element('diagnostic-name').value = '';
-  element('diagnostics').handlers.click(); await tick();
-  assert.deepEqual(calls.at(-1), ['diagnostics']);
-  assert.equal(JSON.parse(element('output').textContent).redacted, true);
-  context.exec = async () => { throw new Error('existing files are not replaced'); };
+  assert.equal(prompts.length, 0);
+  existing = true;
+  const before = calls.length;
   element('export-diagnostics').handlers.click(); await tick();
-  assert.equal(element('feedback').textContent, 'existing files are not replaced');
+  assert.equal(calls.length, before + 1);
+  assert.equal(element('feedback').textContent, 'Export cancelled.');
+  assert.equal(prompts.at(-1), 'Replace the existing file at /sdcard/Download/诊断 report.json?');
+  overwrite = true;
+  element('export-diagnostics').handlers.click(); await tick();
+  assert.deepEqual(calls.at(-1), ['export-diagnostics', '--overwrite', '/sdcard/Download/诊断 report.json', 'Service.Private.Example.']);
+  element('diagnostic-name').value = '';
+  element('export-diagnostics').handlers.click(); await tick();
+  assert.deepEqual(calls.at(-1), ['export-diagnostics', '--overwrite', '/sdcard/Download/诊断 report.json']);
+  context.exec = async () => { throw new Error('disk full'); };
+  element('export-diagnostics').handlers.click(); await tick();
+  assert.equal(element('feedback').textContent, 'disk full');
   assert.equal(element('diagnostic-path').value, '/sdcard/Download/诊断 report.json');
 });
