@@ -7,16 +7,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
+	"tailscale.com/types/dnstype"
 )
 
 func TestAndroidDNSUpstreamUsesSocketControl(t *testing.T) {
@@ -28,14 +32,25 @@ func TestAndroidDNSUpstreamUsesSocketControl(t *testing.T) {
 	tstest.Replace(t, &moduleDNSListenConfig, lc)
 	request := makeTestRequest(t, "service.example.", dns.TypeA, 0)
 	response := makeTestResponse(t, "service.example.", dns.RCodeSuccess, netip.MustParseAddr("192.0.2.1"))
+	f := &forwarder{logf: t.Logf, dialer: &tsdial.Dialer{}}
+	defer f.dialer.Close()
+	f.dialer.SetSystemDialerForTest(func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("module DNS must use marked kernel routes, not SystemDial")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fq := &forwardQuery{packet: request, txid: getTxID(request), closeOnCtxDone: new(closePool)}
+	stop := context.AfterFunc(ctx, func() { fq.closeOnCtxDone.Close() })
+	defer stop()
+	// Exercise each transport synchronously so fallback goroutines cannot outlive the override.
 	for _, family := range []string{"udp", "tcp"} {
 		port := runDNSServer(t, &testDNSServerOptions{SkipUDP: family == "tcp", SkipTCP: family == "udp"}, response, func(bool, []byte) {})
 		before := calls[family].Load()
-		got, err := runTestQueryWithFamily(t, request, family, func(f *forwarder) {
-			f.dialer.SetSystemDialerForTest(func(context.Context, string, string) (net.Conn, error) {
-				return nil, errors.New("module DNS must use marked kernel routes, not SystemDial")
-			})
-		}, port)
+		send := f.sendUDP
+		if family == "tcp" {
+			send = f.sendTCP
+		}
+		got, err := send(ctx, fq, resolverAndDelay{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}})
 		if err != nil || !bytes.Equal(got, response) || calls[family].Load() <= before {
 			t.Fatalf("%s: response %x err %v control calls %d", family, got, err, calls[family].Load()-before)
 		}

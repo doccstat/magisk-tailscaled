@@ -1,0 +1,34 @@
+--- a/wgengine/router/osrouter/router_linux.go
++++ b/wgengine/router/osrouter/router_linux.go
+@@ -13,6 +13,7 @@
+ 	"os"
+ 	"os/exec"
+ 	"runtime"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -314,8 +315,8 @@
+ // onIPRuleDeleted is the callback from the network monitor for when an IP
+ // policy rule is deleted. See Issue 1591.
+ //
+-// If an ip rule is deleted (with pref number 52xx, as Tailscale sets), then
+-// set a timer to restore our rules, in case they were deleted. The timer lets
++// If a rule at one of our configured priorities is deleted, set a timer to
++// restore our rules, in case they were deleted. The timer lets
+ // us do one fixup in response to a batch of rule deletes. It also lets us
+ // delay arbitrarily to prevent a high-speed fight over the rule between
+ // competing processes. (Although empirically, systemd doesn't fight us
+@@ -324,8 +325,10 @@
+ // Note that we don't care about the table number. We don't strictly even care
+ // about the priority number. We could just do this in response to any netlink
+-// change. Filtering by known priority ranges cuts back on some logspam.
++// change. Filtering by configured priorities cuts back on some logspam.
+ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
+-	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
++	if !slices.ContainsFunc(ipRules(), func(rule netlink.Rule) bool {
++		return int(priority) == r.ipPolicyPrefBase+rule.Priority
++	}) {
+ 		// Not our rule.
+ 		return
+ 	}
