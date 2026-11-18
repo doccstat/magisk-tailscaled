@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Restore deleted routing-policy rules using the active platform's configured
+  priorities, including Android's rules after a framework/netd restart.
 - Capture Android system DNS as well as direct app queries; exempt only marked
   module upstream sockets instead of all root traffic.
 - Detach the service from the manager's freezer cgroup before launching the daemon.
